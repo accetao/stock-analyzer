@@ -14,6 +14,13 @@ import numpy as np
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 from datetime import datetime, timedelta
+import json
+
+try:
+    from openai import OpenAI
+    HAS_OPENAI = True
+except ImportError:
+    HAS_OPENAI = False
 
 import config
 from src import (
@@ -254,6 +261,135 @@ def csv_download(df, filename, label="📥 Download CSV"):
     csv = df.to_csv(index=False)
     st.download_button(label, csv, file_name=filename,
                        mime="text/csv", use_container_width=True)
+
+
+# ─── AI / LLM Engine ────────────────────────────────────────────────────────
+
+def get_ai_client():
+    """Return an OpenAI-compatible client if API key is configured."""
+    if not HAS_OPENAI:
+        return None
+    api_key = st.session_state.get("openai_api_key", "").strip()
+    if not api_key:
+        api_key = os.environ.get("OPENAI_API_KEY", "").strip()
+    if not api_key:
+        return None
+    base_url = st.session_state.get("openai_base_url", "").strip() or None
+    return OpenAI(api_key=api_key, base_url=base_url)
+
+
+def ai_available() -> bool:
+    """Check if the AI engine is configured and ready."""
+    return get_ai_client() is not None
+
+
+def call_llm(system_prompt: str, user_prompt: str,
+             model: str = None, temperature: float = 0.7,
+             max_tokens: int = 1500) -> str:
+    """Call the LLM and return the text response."""
+    client = get_ai_client()
+    if not client:
+        return ""
+    mdl = model or st.session_state.get("openai_model", "gpt-4o-mini")
+    try:
+        resp = client.chat.completions.create(
+            model=mdl,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
+            temperature=temperature,
+            max_tokens=max_tokens,
+        )
+        return resp.choices[0].message.content.strip()
+    except Exception as e:
+        return f"⚠️ AI Error: {e}"
+
+
+def build_stock_context(symbol, info, result, signals, trend_data, metrics, articles=None):
+    """Build a rich context string with all stock data for the LLM."""
+    name = info.get('shortName', symbol)
+    price = info.get('currentPrice') or info.get('regularMarketPrice', 0)
+    ctx = {
+        "symbol": symbol,
+        "company_name": name,
+        "sector": info.get('sector', 'Unknown'),
+        "industry": info.get('industry', 'Unknown'),
+        "current_price": price,
+        "market_cap": info.get('marketCap'),
+        "52w_high": info.get('fiftyTwoWeekHigh'),
+        "52w_low": info.get('fiftyTwoWeekLow'),
+        "score": {
+            "overall": result.get('overall_score'),
+            "rating": result.get('rating'),
+            "technical": result.get('technical_score'),
+            "fundamental": result.get('fundamental_score'),
+            "trend": result.get('trend_score'),
+            "momentum": result.get('momentum_score'),
+        },
+        "technical_signals": {
+            "rsi": signals.get('rsi'),
+            "rsi_signal": signals.get('rsi_signal'),
+            "macd_signal": signals.get('macd_signal'),
+            "above_sma200": signals.get('above_sma200'),
+            "ma_trend": signals.get('ma_trend'),
+            "bb_signal": signals.get('bb_signal'),
+            "adx": signals.get('adx'),
+        },
+        "trend": {
+            "direction": str(trend_data.get('trend', 'SIDEWAYS')),
+            "confidence": trend_data.get('confidence'),
+            "bullish_pct": trend_data.get('bullish_pct'),
+            "bearish_pct": trend_data.get('bearish_pct'),
+        },
+        "fundamentals": {},
+    }
+    if metrics:
+        ctx["fundamentals"] = {
+            "trailing_pe": metrics.get('trailing_pe'),
+            "forward_pe": metrics.get('forward_pe'),
+            "peg_ratio": metrics.get('peg_ratio'),
+            "profit_margin": metrics.get('profit_margin'),
+            "revenue_growth": metrics.get('revenue_growth'),
+            "earnings_growth": metrics.get('earnings_growth'),
+            "debt_to_equity": metrics.get('debt_to_equity'),
+            "roe": metrics.get('roe'),
+            "free_cashflow": metrics.get('free_cashflow'),
+            "analyst_recommendation": metrics.get('recommendation'),
+            "target_mean_price": metrics.get('target_mean_price'),
+            "target_low": metrics.get('target_low_price'),
+            "target_high": metrics.get('target_high_price'),
+        }
+    if articles:
+        ctx["recent_news"] = [
+            {"title": a.get("title", ""), "publisher": a.get("publisher", ""),
+             "time": a.get("publish_time", "")}
+            for a in articles[:8]
+        ]
+    return json.dumps(ctx, indent=2, default=str)
+
+
+AI_SYSTEM_PROMPT = """You are a world-class stock analyst AI assistant. You analyze stocks using 
+technical analysis, fundamental analysis, trend data, and recent news. 
+
+Your analysis should be:
+- Written in clear, conversational English that retail investors can understand
+- Data-driven: reference specific numbers from the data provided
+- Balanced: always discuss both bullish and bearish factors
+- Actionable: end with a clear recommendation and key levels to watch
+- Honest: if data is missing or unclear, say so
+
+Format your response using Markdown with headers, bullet points, and bold for key numbers.
+Keep it concise but thorough (300-500 words)."""
+
+NEWS_SENTIMENT_PROMPT = """You are a financial news analyst AI. Analyze the following news headlines 
+about a stock and provide:
+1. An overall sentiment score from -100 (extremely bearish) to +100 (extremely bullish)
+2. A brief 2-3 sentence summary of what the news means for investors
+3. For each headline, a quick sentiment tag (🟢 Bullish / 🔴 Bearish / 🟡 Neutral) and a 
+   one-line explanation of its market impact
+
+Be specific and reference the actual headlines. Format using Markdown."""
 
 
 @st.cache_data(ttl=900, show_spinner=False)
@@ -620,6 +756,31 @@ with st.sidebar:
         data_fetcher.clear_cache()
         st.cache_data.clear()
         st.success("Cache cleared!")
+
+    # ── AI Configuration ──
+    st.divider()
+    with st.expander("🤖 AI Settings", expanded=False):
+        st.caption("Connect any OpenAI-compatible API for live AI insights")
+        st.text_input(
+            "API Key", type="password", key="openai_api_key",
+            placeholder="sk-... or any compatible key",
+            help="Your key is stored only in this session, never saved.",
+        )
+        st.text_input(
+            "Base URL (optional)", key="openai_base_url",
+            placeholder="https://api.openai.com/v1",
+            help="Leave empty for OpenAI. Set for Azure, Ollama, etc.",
+        )
+        st.text_input(
+            "Model", key="openai_model", value="gpt-4o-mini",
+            help="e.g. gpt-4o, gpt-4o-mini, gpt-3.5-turbo, or local model name",
+        )
+        if ai_available():
+            st.success("✅ AI engine connected")
+        elif HAS_OPENAI:
+            st.info("Enter an API key to enable AI insights")
+        else:
+            st.warning("Install `openai` package for AI features")
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -1073,6 +1234,40 @@ elif page == "🔍 Stock Analysis":
                 if not articles:
                     st.info("No recent news found for this stock.")
                 else:
+                    # ── AI News Sentiment Analysis ──
+                    if ai_available():
+                        headlines_text = "\n".join(
+                            f"- {a.get('title', 'N/A')} ({a.get('publisher', 'Unknown')}, {a.get('publish_time', '')})"
+                            for a in articles
+                        )
+                        news_prompt = (f"Stock: {symbol} ({info.get('shortName', symbol)})\n"
+                                       f"Current price: ${price:.2f}\n\n"
+                                       f"Headlines:\n{headlines_text}")
+
+                        with st.spinner("🤖 AI is analyzing news sentiment..."):
+                            sentiment_response = call_llm(
+                                NEWS_SENTIMENT_PROMPT, news_prompt,
+                                temperature=0.4, max_tokens=1200,
+                            )
+
+                        if sentiment_response and not sentiment_response.startswith("⚠️"):
+                            st.markdown(
+                                f'<div style="background:linear-gradient(135deg,#e8f5e9,#e3f2fd);'
+                                f'border-radius:14px;padding:1.2rem;border:1px solid #c8e6c9;'
+                                f'margin-bottom:1rem">'
+                                f'<div style="font-weight:700;font-size:1rem;margin-bottom:0.5rem">'
+                                f'🤖 AI News Sentiment Analysis</div>'
+                                f'<div style="font-size:0.9rem;line-height:1.7">{sentiment_response}</div>'
+                                f'</div>',
+                                unsafe_allow_html=True,
+                            )
+                            st.divider()
+                        elif sentiment_response.startswith("⚠️"):
+                            st.warning(sentiment_response)
+                    else:
+                        st.info("💡 Configure an AI API key in the sidebar to get AI-powered news sentiment analysis")
+
+                    # ── News list ──
                     for i, art in enumerate(articles):
                         title = art.get("title", "No title")
                         link = art.get("link", "")
@@ -1100,22 +1295,122 @@ elif page == "🔍 Stock Analysis":
 
             # ── TAB: AI Insights ──
             with tab_ai:
-                st.markdown("#### 🧠 AI-Generated Analysis")
-                st.caption("A plain-English summary synthesizing all data points into an actionable narrative")
+                st.markdown("#### 🧠 AI-Powered Analysis")
 
-                narrative = generate_ai_narrative(
-                    symbol, info, result, signals, trend_data, metrics
-                )
-                st.markdown(
-                    f'<div style="background:linear-gradient(135deg,#f8f9fa,#e8f0fe);'
-                    f'border-radius:14px;padding:1.5rem;border:1px solid #ddd;'
-                    f'line-height:1.8;font-size:0.95rem">{narrative}</div>',
-                    unsafe_allow_html=True,
-                )
+                # ── Dynamic LLM Analysis ──
+                if ai_available():
+                    st.caption("🔴 Live AI analysis — powered by your connected LLM")
+
+                    # Fetch news for context
+                    ai_articles = fetch_news(symbol, max_items=8)
+
+                    # Build full context
+                    stock_ctx = build_stock_context(
+                        symbol, info, result, signals, trend_data, metrics, ai_articles
+                    )
+
+                    ai_user_prompt = (
+                        f"Analyze this stock in detail. Here is the complete data:\n\n"
+                        f"{stock_ctx}\n\n"
+                        f"Please provide:\n"
+                        f"1. **Executive Summary** — a 2-3 sentence overview\n"
+                        f"2. **Technical Analysis** — what the charts and indicators are telling us\n"
+                        f"3. **Fundamental Assessment** — valuation, growth, financial health\n"
+                        f"4. **News & Sentiment** — what recent news means for the stock\n"
+                        f"5. **Risk Factors** — key risks investors should know\n"
+                        f"6. **Action Plan** — specific entry/exit levels, position sizing advice\n"
+                        f"7. **Verdict** — final BUY/HOLD/SELL recommendation with conviction level"
+                    )
+
+                    # Cache key for this analysis
+                    ai_cache_key = f"ai_analysis_{symbol}_{result.get('overall_score', 0):.0f}"
+                    if ai_cache_key not in st.session_state:
+                        with st.spinner("🤖 AI is generating a deep analysis..."):
+                            st.session_state[ai_cache_key] = call_llm(
+                                AI_SYSTEM_PROMPT, ai_user_prompt,
+                                temperature=0.6, max_tokens=2000,
+                            )
+
+                    ai_response = st.session_state[ai_cache_key]
+
+                    if ai_response and not ai_response.startswith("⚠️"):
+                        st.markdown(
+                            f'<div style="background:linear-gradient(135deg,#f3e5f5,#e8f0fe);'
+                            f'border-radius:14px;padding:1.5rem;border:1px solid #ce93d8;'
+                            f'line-height:1.8;font-size:0.92rem">'
+                            f'<div style="display:flex;align-items:center;gap:0.5rem;'
+                            f'margin-bottom:0.8rem">'
+                            f'<span style="font-size:1.5rem">🤖</span>'
+                            f'<span style="font-weight:700;font-size:1.05rem">'
+                            f'Live AI Analysis — {info.get("shortName", symbol)}</span>'
+                            f'<span style="background:#ce93d8;color:white;padding:2px 10px;'
+                            f'border-radius:12px;font-size:0.75rem;font-weight:600">'
+                            f'AI-GENERATED</span></div></div>',
+                            unsafe_allow_html=True,
+                        )
+                        st.markdown(ai_response)
+
+                        # Regenerate button
+                        if st.button("🔄 Regenerate Analysis", key="regen_ai"):
+                            if ai_cache_key in st.session_state:
+                                del st.session_state[ai_cache_key]
+                            st.rerun()
+                    else:
+                        st.error(ai_response or "Failed to get AI response")
+
+                    st.divider()
+
+                    # ── Ask AI a follow-up question ──
+                    st.markdown("#### 💬 Ask AI About This Stock")
+                    user_q = st.text_input(
+                        "Ask anything", placeholder=f"Is {symbol} a good buy for retirement?",
+                        key="ai_question", label_visibility="collapsed",
+                    )
+                    if st.button("🚀 Ask", key="ai_ask_btn") and user_q:
+                        followup_prompt = (
+                            f"Context about {symbol}:\n{stock_ctx}\n\n"
+                            f"User question: {user_q}\n\n"
+                            f"Answer the question based on the stock data provided. "
+                            f"Be specific, reference actual numbers, and be helpful."
+                        )
+                        with st.spinner("🤖 Thinking..."):
+                            answer = call_llm(
+                                AI_SYSTEM_PROMPT, followup_prompt,
+                                temperature=0.5, max_tokens=800,
+                            )
+                        if answer:
+                            st.markdown(
+                                f'<div style="background:#f3e5f5;border-radius:12px;'
+                                f'padding:1rem;border:1px solid #ce93d8;margin-top:0.5rem">'
+                                f'{answer}</div>',
+                                unsafe_allow_html=True,
+                            )
+
+                else:
+                    # ── Fallback: static analysis (no API key) ──
+                    st.caption("📊 Rule-based analysis — configure AI in sidebar for live LLM insights")
+                    st.info(
+                        "💡 **Upgrade to AI-powered insights!** Enter an OpenAI-compatible API key "
+                        "in the sidebar → 🤖 AI Settings to unlock:\n"
+                        "- Deep AI narrative analysis\n"
+                        "- AI news sentiment scoring\n"
+                        "- Interactive Q&A about any stock\n"
+                        "- Works with OpenAI, Azure, Ollama, and any compatible API"
+                    )
+
+                    narrative = generate_ai_narrative(
+                        symbol, info, result, signals, trend_data, metrics
+                    )
+                    st.markdown(
+                        f'<div style="background:linear-gradient(135deg,#f8f9fa,#e8f0fe);'
+                        f'border-radius:14px;padding:1.5rem;border:1px solid #ddd;'
+                        f'line-height:1.8;font-size:0.95rem">{narrative}</div>',
+                        unsafe_allow_html=True,
+                    )
 
                 st.divider()
 
-                # Decision helper
+                # Decision helper (always shown)
                 st.markdown("#### ✅ Decision Checklist")
                 checklist_items = [
                     ("Score above 60 (Buy zone)", (result.get('overall_score', 0) or 0) >= 60),

@@ -12,5 +12,8 @@ plotly>=5.18.0
 # Web UI
 streamlit>=1.30.0
 
+# AI / LLM (optional but recommended)
+openai>=1.0.0
+
 # Optional: for enhanced terminal output
 colorama>=0.4.6
