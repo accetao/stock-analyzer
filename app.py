@@ -2322,8 +2322,11 @@ elif page == "⏳ What-If Machine":
         if wi_df.empty:
             st.error(f"No data for {wi_symbol}")
         else:
-            # Find the target date
+            # Find the target date (tz-aware to match yfinance index)
             target_date = datetime.now() - timedelta(days=wi_years * 365)
+            # Make target_date timezone-aware if the index is
+            if wi_df.index.tz is not None:
+                target_date = target_date.astimezone(wi_df.index.tz)
             # Find closest available date
             available = wi_df.index[wi_df.index >= target_date]
             if available.empty:
