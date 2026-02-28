@@ -263,7 +263,95 @@ def csv_download(df, filename, label="📥 Download CSV"):
                        mime="text/csv", use_container_width=True)
 
 
-# ─── AI / LLM Engine ────────────────────────────────────────────────────────
+# ─── Symbol Search ───────────────────────────────────────────────────────────
+
+_SYMBOLS_PATH = os.path.join(os.path.dirname(__file__), "data", "stock_symbols.json")
+
+
+@st.cache_data(ttl=86400, show_spinner=False)
+def _load_stock_symbols() -> dict:
+    """Load the ticker → company-name map from the bundled JSON file."""
+    try:
+        with open(_SYMBOLS_PATH, "r") as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+
+@st.cache_data(ttl=86400, show_spinner=False)
+def _build_symbol_options() -> list[str]:
+    """Pre-build sorted selectbox options: 'AAPL — Apple Inc.' """
+    symbols = _load_stock_symbols()
+    return sorted(f"{t} — {n}" for t, n in symbols.items())
+
+
+def _search_symbols(query: str, limit: int = 10) -> list[str]:
+    """Fuzzy search: match by ticker prefix OR company-name substring."""
+    if not query:
+        return []
+    symbols = _load_stock_symbols()
+    q_upper = query.upper().strip()
+    q_lower = query.lower().strip()
+
+    # Exact ticker hit → return immediately
+    if q_upper in symbols:
+        return [f"{q_upper} — {symbols[q_upper]}"]
+
+    ticker_hits = []
+    name_hits = []
+    for t, n in symbols.items():
+        if t.startswith(q_upper):
+            ticker_hits.append(f"{t} — {n}")
+        elif q_lower in n.lower():
+            name_hits.append(f"{t} — {n}")
+    # Ticker-prefix matches first, then name matches
+    return (ticker_hits + name_hits)[:limit]
+
+
+def symbol_search(label: str = "🔍 Search stock",
+                  key: str = "sym",
+                  default: str = "AAPL") -> str:
+    """Render a smart symbol search box with autocomplete suggestions.
+
+    Returns the chosen ticker string (e.g. 'AAPL').
+    """
+    # Initialise the query box with default if first render
+    q_key = f"_{key}_q"
+    result_key = f"_{key}_result"
+
+    query = st.text_input(
+        label, key=q_key,
+        placeholder="Type ticker or company name  (e.g. AAPL, Apple, Tesla…)",
+        label_visibility="visible",
+    )
+
+    if not query:
+        return st.session_state.get(result_key, default)
+
+    q_upper = query.upper().strip()
+    symbols = _load_stock_symbols()
+
+    # Exact ticker → return right away, no dropdown
+    if q_upper in symbols:
+        st.session_state[result_key] = q_upper
+        return q_upper
+
+    # Fuzzy matches → show a selection list
+    matches = _search_symbols(query, limit=10)
+    if matches:
+        sel = st.selectbox(
+            "Matches", matches,
+            key=f"_{key}_sel",
+            label_visibility="collapsed",
+        )
+        chosen = sel.split(" — ")[0] if sel else q_upper
+        st.session_state[result_key] = chosen
+        return chosen
+
+    # No matches in database — treat as custom symbol
+    st.caption(f"ℹ️ *\"{q_upper}\" not in database — will be looked up on Yahoo Finance*")
+    st.session_state[result_key] = q_upper
+    return q_upper# ─── AI / LLM Engine ────────────────────────────────────────────────────────
 
 def _normalize_base_url(url: str) -> str:
     """Ensure the base URL ends with /v1 and uses 127.0.0.1 instead of localhost.
@@ -1016,9 +1104,9 @@ if page == "🏠 Dashboard":
     # Quick symbol entry
     col_a, col_b = st.columns([3, 1])
     with col_a:
-        quick_sym = st.text_input("Quick lookup", placeholder="Enter symbol e.g. AAPL",
-                                  label_visibility="collapsed")
+        quick_sym = symbol_search("Quick lookup", key="dash_sym", default="")
     with col_b:
+        st.markdown("<br>", unsafe_allow_html=True)
         quick_go = st.button("Analyze →", use_container_width=True)
 
     if quick_go and quick_sym:
@@ -1092,15 +1180,15 @@ elif page == "🔍 Stock Analysis":
 
     # Input bar
     auto_run = "analyze_symbol" in st.session_state
+    _auto_sym = ""
     if auto_run:
-        st.session_state["sym_input"] = st.session_state.pop("analyze_symbol")
-        st.session_state["_analysis_active"] = True  # keep analysis open across reruns
-    elif "sym_input" not in st.session_state:
-        st.session_state["sym_input"] = "AAPL"
+        _auto_sym = st.session_state.pop("analyze_symbol")
+        st.session_state["_analysis_active"] = True
 
     col1, col2, col3 = st.columns([2, 1, 1])
     with col1:
-        symbol = st.text_input("Symbol", key="sym_input").upper().strip()
+        symbol = symbol_search("🔍 Search stock", key="sym_main",
+                               default=_auto_sym if auto_run else "AAPL")
     with col2:
         period = st.selectbox("Period", ["1mo", "3mo", "6mo", "1y", "2y", "5y"], index=3)
     with col3:
@@ -1955,12 +2043,24 @@ elif page == "⚖️ Compare":
     st.markdown("## ⚖️ Stock X-Ray Comparison")
     st.caption("Side-by-side deep analysis — returns, risk, correlation, drawdowns")
 
-    cmp_syms = st.text_input("Symbols (comma-separated)", "AAPL, MSFT, GOOGL, AMZN")
+    _all_opts = _build_symbol_options()
+    _cmp_defaults = [o for o in _all_opts if o.split(" — ")[0] in ("AAPL", "MSFT", "GOOGL", "AMZN")]
+    cmp_picks = st.multiselect(
+        "🔍 Search & select stocks to compare",
+        options=_all_opts,
+        default=_cmp_defaults,
+        placeholder="Type ticker or company name…",
+    )
+    _cmp_custom = st.text_input("Add custom symbols (comma-separated)",
+                                placeholder="CUSTOM1, CUSTOM2",
+                                key="cmp_custom")
     cmp_period = st.selectbox("Period", ["3mo", "6mo", "1y", "2y", "5y"], index=2)
     cmp_go = st.button("⚖️ Compare", type="primary")
 
-    if cmp_go and cmp_syms:
-        symbols = [s.strip().upper() for s in cmp_syms.split(",") if s.strip()]
+    if cmp_go:
+        symbols = [p.split(" — ")[0] for p in cmp_picks]
+        if _cmp_custom:
+            symbols += [s.strip().upper() for s in _cmp_custom.split(",") if s.strip()]
 
         if len(symbols) < 2:
             st.warning("Enter at least 2 symbols.")
@@ -2118,7 +2218,7 @@ elif page == "⏳ What-If Machine":
 
     wi1, wi2, wi3 = st.columns(3)
     with wi1:
-        wi_symbol = st.text_input("Stock symbol", "AAPL").upper().strip()
+        wi_symbol = symbol_search("Stock symbol", key="wi_sym", default="AAPL")
     with wi2:
         wi_amount = st.number_input("Investment amount ($)", min_value=100,
                                      max_value=10_000_000, value=10_000, step=1000)
@@ -2261,7 +2361,7 @@ elif page == "💼 Portfolio Tracker":
     with st.expander("✏️ Edit Holdings", expanded=False):
         pe1, pe2, pe3, pe4 = st.columns([2, 1, 1, 1])
         with pe1:
-            pf_sym = st.text_input("Symbol", "NVDA", key="pf_add_sym").upper().strip()
+            pf_sym = symbol_search("Symbol", key="pf_add_sym", default="NVDA")
         with pe2:
             pf_shares = st.number_input("Shares", min_value=0.01, value=10.0,
                                          step=1.0, key="pf_add_shares")
@@ -2449,12 +2549,22 @@ elif page == "📋 Watchlist":
 
     with wl2:
         st.markdown("### Actions")
-        add_syms = st.text_input("Add symbols", placeholder="TSLA, AMD, NFLX")
-        if st.button("➕ Add", use_container_width=True) and add_syms:
-            new = [s.strip().upper() for s in add_syms.split(",") if s.strip()]
-            utils.add_to_watchlist(new)
-            st.success(f"Added: {', '.join(new)}")
-            st.rerun()
+        _wl_opts = _build_symbol_options()
+        _wl_add_picks = st.multiselect(
+            "🔍 Add stocks", options=_wl_opts,
+            placeholder="Type ticker or company name…",
+            key="wl_add_picks",
+        )
+        _wl_add_custom = st.text_input("Add custom symbols", placeholder="CUSTOM1, CUSTOM2",
+                                        key="wl_add_custom")
+        if st.button("➕ Add", use_container_width=True):
+            new = [p.split(" — ")[0] for p in _wl_add_picks]
+            if _wl_add_custom:
+                new += [s.strip().upper() for s in _wl_add_custom.split(",") if s.strip()]
+            if new:
+                utils.add_to_watchlist(new)
+                st.success(f"Added: {', '.join(new)}")
+                st.rerun()
 
         remove_syms = st.text_input("Remove symbols", placeholder="INTC, IBM")
         if st.button("➖ Remove", use_container_width=True) and remove_syms:
