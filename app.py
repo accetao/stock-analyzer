@@ -34,9 +34,10 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-# ─── Custom CSS ──────────────────────────────────────────────────────────────
+# ─── Custom CSS (responsive: desktop + tablet + mobile) ──────────────────────
 st.markdown("""
 <style>
+    /* ═══ Base / Desktop Styles ═══ */
     .main-header {
         font-size: 2.2rem; font-weight: 700;
         background: linear-gradient(90deg, #1e88e5, #43a047);
@@ -56,7 +57,116 @@ st.markdown("""
     .signal-bullish   { color: #4caf50; font-weight: 600; }
     .signal-bearish   { color: #f44336; font-weight: 600; }
     .signal-neutral   { color: #ff9800; font-weight: 600; }
-    div[data-testid="stMetric"] { background: #f8f9fa; border-radius: 8px; padding: 0.8rem; }
+    div[data-testid="stMetric"] {
+        background: #f8f9fa; border-radius: 8px; padding: 0.8rem;
+    }
+
+    /* ═══ Tablet (≤ 1024px): max 2 columns per row ═══ */
+    @media (max-width: 1024px) {
+        [data-testid="stHorizontalBlock"] {
+            flex-wrap: wrap !important;
+            gap: 0.5rem !important;
+        }
+        [data-testid="stHorizontalBlock"] > div[data-testid="stColumn"] {
+            min-width: calc(48%) !important;
+            flex: 1 1 calc(48%) !important;
+        }
+        .block-container {
+            padding-left: 1rem !important;
+            padding-right: 1rem !important;
+            max-width: 100% !important;
+        }
+    }
+
+    /* ═══ Phone (≤ 768px): single-column stack ═══ */
+    @media (max-width: 768px) {
+        /* Stack every column group vertically */
+        [data-testid="stHorizontalBlock"] {
+            flex-wrap: wrap !important;
+            gap: 0.35rem !important;
+        }
+        [data-testid="stHorizontalBlock"] > div[data-testid="stColumn"] {
+            min-width: 100% !important;
+            flex: 1 1 100% !important;
+        }
+
+        /* Tighter page padding */
+        .block-container {
+            padding: 0.75rem 0.5rem !important;
+            max-width: 100% !important;
+        }
+
+        /* Smaller branding */
+        .main-header { font-size: 1.5rem !important; }
+        .sub-header  { font-size: 0.8rem  !important; }
+        h2 { font-size: 1.35rem !important; }
+        h3 { font-size: 1.15rem !important; }
+
+        /* Compact metrics */
+        div[data-testid="stMetric"] { padding: 0.5rem !important; }
+        div[data-testid="stMetric"] label { font-size: 0.72rem !important; }
+        div[data-testid="stMetric"] [data-testid="stMetricValue"] {
+            font-size: 1.05rem !important;
+        }
+
+        /* Narrower sidebar */
+        [data-testid="stSidebar"] {
+            min-width: 200px !important;
+            max-width: 250px !important;
+        }
+        [data-testid="stSidebar"] .main-header { font-size: 1.3rem !important; }
+
+        /* Horizontal-scroll for wide tables */
+        [data-testid="stDataFrame"] > div {
+            overflow-x: auto !important;
+            -webkit-overflow-scrolling: touch !important;
+        }
+
+        /* Tabs: smaller labels, horizontal scroll */
+        [data-testid="stTabs"] [role="tablist"] {
+            overflow-x: auto !important;
+            flex-wrap: nowrap !important;
+            -webkit-overflow-scrolling: touch !important;
+        }
+        [data-testid="stTabs"] button {
+            font-size: 0.76rem !important;
+            padding: 0.4rem 0.55rem !important;
+            white-space: nowrap !important;
+        }
+
+        /* Bigger touch targets for buttons */
+        .stButton > button {
+            min-height: 2.75rem !important;
+            font-size: 0.9rem !important;
+        }
+
+        /* Prevent iOS auto-zoom on text inputs */
+        .stTextInput input, .stSelectbox select, .stTextArea textarea {
+            font-size: 16px !important;
+        }
+
+        /* Constrain Plotly charts to viewport height */
+        [data-testid="stPlotlyChart"] > div {
+            max-height: 65vh !important;
+        }
+    }
+
+    /* ═══ Small phones (≤ 480px) ═══ */
+    @media (max-width: 480px) {
+        .block-container {
+            padding: 0.5rem 0.35rem !important;
+        }
+        h2 { font-size: 1.2rem !important; }
+        h3 { font-size: 1.05rem !important; }
+
+        div[data-testid="stMetric"] label { font-size: 0.65rem !important; }
+        div[data-testid="stMetric"] [data-testid="stMetricValue"] {
+            font-size: 0.95rem !important;
+        }
+
+        /* Dashboard stock cards: tighter padding */
+        .metric-card { padding: 0.6rem 0.8rem; }
+    }
 </style>
 """, unsafe_allow_html=True)
 
