@@ -2753,7 +2753,6 @@ elif page == "🧓 Buffett Portfolio":
 
     # ── Live holdings table ──
     st.markdown("#### Full Holdings — Live Prices")
-    st.caption("Click any stock below to run a full analysis")
 
     progress = st.progress(0, text="Fetching live data...")
     table_rows = []
@@ -2790,11 +2789,25 @@ elif page == "🧓 Buffett Portfolio":
     progress.empty()
 
     buff_df = pd.DataFrame(table_rows)
-    st.dataframe(buff_df, use_container_width=True, hide_index=True)
+
+    # Clickable table — select a row to analyze that stock
+    st.caption("👆 Click a row in the table below to analyze that stock")
+    event = st.dataframe(
+        buff_df, use_container_width=True, hide_index=True,
+        on_select="rerun", selection_mode="single-row",
+        key="buff_table_sel",
+    )
+    _sel_rows = event.selection.rows if event and event.selection else []
+    if _sel_rows:
+        _picked_sym = buff_df.iloc[_sel_rows[0]]["Symbol"]
+        go_to_analysis(_picked_sym)
+        st.rerun()
+
     csv_download(buff_df, "buffett_portfolio.csv")
 
-    # Quick-analyze pills
+    # Quick-analyze pills (alternative)
     buff_syms = [h["symbol"] for h in BUFFETT_HOLDINGS]
+    st.markdown("**Or pick a stock directly:**")
     selected = st.pills("🔍 Analyze a Buffett stock", buff_syms,
                         default=None, key="buff_pill")
     if selected:
