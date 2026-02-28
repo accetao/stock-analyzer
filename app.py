@@ -267,15 +267,13 @@ _SLUG_TO_PAGE = {v: k for k, v in _PAGE_TO_SLUG.items()}
 
 
 def _sync_url_to_state():
-    """On page load, read ?page= and ?symbol= from the URL and set session state.
+    """On FIRST load only, read ?page= and ?symbol= from the URL.
 
-    Only acts when session state hasn't been set yet (first load or direct link).
-    After the sidebar radio is rendered, the radio widget owns main_nav.
+    After the first load, the sidebar radio widget owns navigation.
+    This function never triggers reruns.
     """
-    # Programmatic nav (go_to_analysis) takes priority
     if "nav_to" in st.session_state:
         return
-    # Only seed state on first load (before the radio widget has set main_nav)
     if "main_nav" in st.session_state:
         return
     qp = st.query_params
@@ -289,24 +287,23 @@ def _sync_url_to_state():
 
 
 def _sync_state_to_url(page_label: str, symbol: str = ""):
-    """Update the browser URL only when it actually differs from current params.
+    """Write current page slug to the URL bar (cosmetic only).
 
-    Avoids triggering unnecessary Streamlit reruns.
+    Uses individual param assignment instead of from_dict to avoid
+    triggering Streamlit reruns.
     """
     slug = _PAGE_TO_SLUG.get(page_label, "dashboard")
-    want = {"page": slug}
-    if symbol:
-        want["symbol"] = symbol.upper()
-    # Read current URL params
     qp = st.query_params
-    current = {}
-    for k in ("page", "symbol"):
-        v = qp.get(k, "")
-        if v:
-            current[k] = v
-    # Only write if something changed
-    if current != want:
-        st.query_params.from_dict(want)
+    # Only touch params that actually changed
+    if qp.get("page", "") != slug:
+        qp["page"] = slug
+    # Handle symbol param
+    if symbol:
+        if qp.get("symbol", "") != symbol.upper():
+            qp["symbol"] = symbol.upper()
+    else:
+        if "symbol" in qp:
+            del qp["symbol"]
 
 
 def go_to_analysis(symbol: str):
