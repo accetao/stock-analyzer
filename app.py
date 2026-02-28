@@ -267,26 +267,45 @@ _SLUG_TO_PAGE = {v: k for k, v in _PAGE_TO_SLUG.items()}
 
 
 def _sync_url_to_state():
-    """On first load, read ?page= and ?symbol= from the URL and seed session state."""
+    """Read ?page= and ?symbol= from the URL and sync session state.
+
+    Runs on every rerun so browser back/forward is detected:
+    if the URL slug differs from the current session page, the URL wins.
+    """
+    # Programmatic nav (go_to_analysis) takes priority over URL
+    if "nav_to" in st.session_state:
+        return
     qp = st.query_params
     slug = qp.get("page", "")
     sym = qp.get("symbol", "")
-    if slug and slug in _SLUG_TO_PAGE:
-        target = _SLUG_TO_PAGE[slug]
-        if "main_nav" not in st.session_state:
-            st.session_state["main_nav"] = target
+    if not slug or slug not in _SLUG_TO_PAGE:
+        return
+    url_page = _SLUG_TO_PAGE[slug]
+    current_page = st.session_state.get("main_nav", "")
+    # If URL page differs from current page -> browser back/forward or direct link
+    if url_page != current_page:
+        st.session_state["main_nav"] = url_page
+        # Clear analysis state when navigating away from analysis
+        if slug != "analysis":
+            st.session_state.pop("_analysis_active", None)
+        # Seed symbol if navigating TO analysis via URL
         if slug == "analysis" and sym:
-            if "analyze_symbol" not in st.session_state:
-                st.session_state["analyze_symbol"] = sym.upper()
+            st.session_state["analyze_symbol"] = sym.upper()
+            st.session_state["_analysis_active"] = True
 
 
 def _sync_state_to_url(page_label: str, symbol: str = ""):
-    """Update the browser URL bar to reflect the current page & symbol."""
+    """Replace all query params to reflect the current page & symbol.
+
+    Uses from_dict to fully replace (not merge) so stale params like
+    &symbol=AAPL are removed when navigating away from the analysis page.
+    """
     slug = _PAGE_TO_SLUG.get(page_label, "dashboard")
     params = {"page": slug}
     if symbol:
         params["symbol"] = symbol.upper()
-    st.query_params.update(params)
+    # from_dict replaces ALL params (vs update which merges)
+    st.query_params.from_dict(params)
 
 
 def go_to_analysis(symbol: str):
