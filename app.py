@@ -283,16 +283,37 @@ def _normalize_base_url(url: str) -> str:
     return url
 
 
+def _get_secret(key: str, default: str = "") -> str:
+    """Read a value from Streamlit secrets (secrets.toml) safely."""
+    try:
+        return str(st.secrets.get(key, default)).strip()
+    except Exception:
+        return default
+
+
 def get_ai_client():
-    """Return an OpenAI-compatible client if API key is configured."""
+    """Return an OpenAI-compatible client if API key is configured.
+
+    Priority order for each setting:
+      1. Session-state (sidebar widget)
+      2. Streamlit secrets  (secrets.toml / Streamlit Cloud dashboard)
+      3. Environment variable
+    """
     if not HAS_OPENAI:
         return None
+    # --- API key ---
     api_key = st.session_state.get("openai_api_key", "").strip()
+    if not api_key:
+        api_key = _get_secret("OPENAI_API_KEY")
     if not api_key:
         api_key = os.environ.get("OPENAI_API_KEY", "").strip()
     if not api_key:
         return None
+    # --- Base URL ---
     base_url = st.session_state.get("openai_base_url", "").strip()
+    if not base_url:
+        base_url = _get_secret("OPENAI_BASE_URL")
+    # --- Build client ---
     kwargs = {"api_key": api_key}
     if base_url:
         kwargs["base_url"] = _normalize_base_url(base_url)
@@ -317,7 +338,9 @@ def call_llm(system_prompt: str, user_prompt: str,
     client = get_ai_client()
     if not client:
         return ""
-    mdl = model or st.session_state.get("openai_model", "gpt-4o-mini")
+    mdl = (model
+           or st.session_state.get("openai_model", "").strip()
+           or _get_secret("OPENAI_MODEL", "gpt-4o-mini"))
     try:
         resp = client.chat.completions.create(
             model=mdl,
@@ -798,27 +821,35 @@ with st.sidebar:
 
     # Auto-detect Ollama BEFORE widgets render so defaults are pre-filled
     _ollama_running = False
+    _ollama_models = []
     try:
         import urllib.request as _ul
         _ollama_req = _ul.urlopen("http://127.0.0.1:11434/api/tags", timeout=2)
         _ollama_running = _ollama_req.status == 200
-        # Fetch available model names
         import json as _json
         _ollama_models = [m["name"] for m in _json.loads(_ollama_req.read()).get("models", [])]
     except Exception:
-        _ollama_models = []
+        pass
 
-    # Auto-configure Ollama on first load (no key set yet)
-    if _ollama_running and not st.session_state.get("openai_api_key"):
-        # Pick best available model
-        _pick = "llama3.2"
-        for _m in _ollama_models:
-            if _m.startswith("llama3.2"):
-                _pick = _m.split(":")[0]  # "llama3.2:latest" -> "llama3.2"
-                break
-        st.session_state["openai_api_key"] = "ollama"
-        st.session_state["openai_base_url"] = "http://127.0.0.1:11434"
-        st.session_state["openai_model"] = _pick
+    # Pre-fill defaults BEFORE text_input widgets render
+    if not st.session_state.get("openai_api_key"):
+        if _ollama_running:
+            # Local Ollama available — use it
+            _pick = "llama3.2"
+            for _m in _ollama_models:
+                if _m.startswith("llama3.2"):
+                    _pick = _m.split(":")[0]
+                    break
+            st.session_state["openai_api_key"] = "ollama"
+            st.session_state["openai_base_url"] = "http://127.0.0.1:11434"
+            st.session_state["openai_model"] = _pick
+        else:
+            # Cloud / no Ollama — try Streamlit Secrets
+            _secret_key = _get_secret("OPENAI_API_KEY")
+            if _secret_key:
+                st.session_state["openai_api_key"] = _secret_key
+                st.session_state["openai_base_url"] = _get_secret("OPENAI_BASE_URL")
+                st.session_state["openai_model"] = _get_secret("OPENAI_MODEL", "gpt-4o-mini")
 
     with st.expander("🤖 AI Settings", expanded=False):
         st.caption("Connect any OpenAI-compatible API for live AI insights")
@@ -835,28 +866,36 @@ with st.sidebar:
                 st.session_state["openai_base_url"] = "http://127.0.0.1:11434"
                 st.session_state["openai_model"] = _pick
                 st.rerun()
+        elif not st.session_state.get("openai_api_key"):
+            st.info(
+                "☁️ **Cloud mode** — Ollama is not available here. "
+                "Enter an API key below, or the app owner can set "
+                "secrets in the Streamlit Cloud dashboard.\n\n"
+                "**Free options:** [Groq](https://console.groq.com) · "
+                "[OpenRouter](https://openrouter.ai)\n\n"
+                "**Paid:** [OpenAI](https://platform.openai.com/api-keys)"
+            )
 
         st.text_input(
             "API Key", type="password", key="openai_api_key",
-            placeholder="sk-... or any compatible key",
+            placeholder="sk-... or gsk-... or any compatible key",
             help="Your key is stored only in this session, never saved.",
         )
         st.text_input(
             "Base URL (optional)", key="openai_base_url",
-            placeholder="http://127.0.0.1:11434  or  https://api.openai.com/v1",
-            help="Leave empty for OpenAI. For Ollama: http://127.0.0.1:11434",
+            placeholder="https://api.groq.com/openai  or leave empty for OpenAI",
+            help="Leave empty for OpenAI. Groq: https://api.groq.com/openai",
         )
-        # Model input — use default only if not yet set
         if "openai_model" not in st.session_state:
             st.session_state["openai_model"] = "gpt-4o-mini"
         st.text_input(
             "Model", key="openai_model",
-            help="e.g. gpt-4o-mini, llama3.2, mistral, etc.",
+            help="e.g. gpt-4o-mini, llama-3.3-70b-versatile, llama3.2, etc.",
         )
 
         if ai_available():
-            st.success("✅ AI engine connected")
-            # Test connection button
+            _src = "Ollama" if _ollama_running else "Cloud API"
+            st.success(f"✅ AI engine connected ({_src})")
             if st.button("📡 Test Connection", use_container_width=True):
                 with st.spinner("Testing AI connection..."):
                     test_result = call_llm(
@@ -869,10 +908,10 @@ with st.sidebar:
                 else:
                     st.error(f"❌ {test_result}")
                     base = st.session_state.get('openai_base_url', '')
-                    if 'localhost' in base:
-                        st.info("💡 Tip: Change 'localhost' to '127.0.0.1'. "
-                                "On Windows, localhost can resolve to IPv6 (::1) "
-                                "but Ollama only listens on IPv4 (127.0.0.1).")
+                    if 'localhost' in base or '127.0.0.1' in base:
+                        st.info("💡 You're using a local URL but Ollama isn't "
+                                "reachable. If deployed to the cloud, you need "
+                                "a cloud API (OpenAI, Groq, etc.) instead.")
                     elif base and '/v1' not in base:
                         st.info("💡 Tip: The URL will be auto-corrected to include /v1")
         elif HAS_OPENAI:

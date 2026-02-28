@@ -26,5 +26,8 @@ Thumbs.db
 output/
 *.png
 
+# Secrets (never commit API keys)
+.streamlit/secrets.toml
+
 # Data cache (keep watchlists)
 data/*.tmp
