@@ -286,6 +286,7 @@ def _read_url_params():
     # URL differs from what we last wrote → browser back/forward or first load
     url_page = _SLUG_TO_PAGE[slug]
     st.session_state["main_nav"] = url_page
+    st.session_state["_url_nav_from_browser"] = True  # skip URL write this render
     sym = qp.get("symbol", "")
     if slug == "analysis" and sym:
         st.session_state["analyze_symbol"] = sym.upper()
@@ -324,8 +325,13 @@ def _write_url_params(page_label: str, symbol: str = ""):
 
 def go_to_analysis(symbol: str):
     """Navigate to Stock Analysis page for the given symbol."""
-    st.session_state["analyze_symbol"] = symbol.upper().strip()
+    sym = symbol.upper().strip()
+    st.session_state["analyze_symbol"] = sym
     st.session_state["nav_to"] = "🔍 Stock Analysis"
+    # Clear cached symbol search so the new symbol takes effect
+    st.session_state.pop("sym_main", None)
+    st.session_state["_sym_main_result"] = sym
+    st.session_state["_analysis_active"] = True
 
 
 def csv_download(df, filename, label="📥 Download CSV"):
@@ -2977,7 +2983,9 @@ elif page == "🧓 Buffett Portfolio":
 # ═════════════════════════════════════════════════════════════════════════════
 #  URL SYNC — write the current page to the browser URL bar (runs last)
 # ═════════════════════════════════════════════════════════════════════════════
-_url_symbol = ""
-if page == "🔍 Stock Analysis" and st.session_state.get("_analysis_active"):
-    _url_symbol = st.session_state.get("_sym_main_result", "")
-_write_url_params(page, _url_symbol)
+# Skip if this render was triggered by browser back/forward (URL is already right)
+if not st.session_state.pop("_url_nav_from_browser", False):
+    _url_symbol = ""
+    if page == "🔍 Stock Analysis" and st.session_state.get("_analysis_active"):
+        _url_symbol = st.session_state.get("_sym_main_result", "")
+    _write_url_params(page, _url_symbol)
