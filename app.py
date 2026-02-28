@@ -267,10 +267,12 @@ _SLUG_TO_PAGE = {v: k for k, v in _PAGE_TO_SLUG.items()}
 
 
 def _read_url_params():
-    """Detect browser back/forward by comparing the URL slug to the last
-    slug we wrote.  If they differ, the URL changed externally and we
-    update session state to follow it.  If they match, any page change
-    came from the sidebar radio and we leave it alone.
+    """Detect browser back/forward or first load from URL params.
+
+    Compares URL slug to _url_expected (what we last wrote or acknowledged).
+    - Match    -> URL is what we expect, sidebar owns navigation, skip.
+    - Mismatch -> URL changed externally (browser back/forward or first load),
+                  update session state to follow the URL.
     """
     if "nav_to" in st.session_state:
         return
@@ -278,19 +280,20 @@ def _read_url_params():
     slug = qp.get("page", "")
     if not slug or slug not in _SLUG_TO_PAGE:
         return
-    # Compare URL to the last slug WE wrote (not to main_nav)
-    last_written = st.session_state.get("_url_last_slug", "")
-    if slug == last_written:
-        # URL hasn't changed externally → sidebar owns navigation
+    # If URL matches what we expect, nothing changed externally
+    if slug == st.session_state.get("_url_expected", ""):
         return
-    # URL differs from what we last wrote → browser back/forward or first load
+    # URL changed externally -> follow it
     url_page = _SLUG_TO_PAGE[slug]
     st.session_state["main_nav"] = url_page
-    st.session_state["_url_nav_from_browser"] = True  # skip URL write this render
+    st.session_state["_url_expected"] = slug  # acknowledge the new URL
+    # Handle analysis symbol
     sym = qp.get("symbol", "")
     if slug == "analysis" and sym:
         st.session_state["analyze_symbol"] = sym.upper()
         st.session_state["_analysis_active"] = True
+        st.session_state.pop("sym_main", None)
+        st.session_state["_sym_main_result"] = sym.upper()
     elif slug != "analysis":
         st.session_state.pop("_analysis_active", None)
 
@@ -298,30 +301,26 @@ def _read_url_params():
 def _write_url_params(page_label: str, symbol: str = ""):
     """Write the current page to the browser URL bar (once per render).
 
-    Uses from_dict which triggers a Streamlit rerun, but the guard
-    (current == want) ensures it only fires when the URL is stale,
-    so there is no infinite loop.
-
-    Call this ONCE at the very end of the script, never in the sidebar.
+    Called at the very end of the script. Updates _url_expected so
+    _read_url_params can distinguish our writes from browser back/forward.
+    Only calls from_dict when URL actually needs changing.
     """
     slug = _PAGE_TO_SLUG.get(page_label, "dashboard")
     want = {"page": slug}
     if symbol:
         want["symbol"] = symbol.upper()
-    # Read what the URL currently has
+    # Update our expectation BEFORE writing
+    st.session_state["_url_expected"] = slug
+    # Read current URL
     qp = st.query_params
     current = {}
     for k in ("page", "symbol"):
         v = qp.get(k, "")
         if v:
             current[k] = v
-    # Track what we're about to write so _read_url_params can detect
-    # external changes (browser back/forward) vs our own writes.
-    st.session_state["_url_last_slug"] = slug
-    # Only write when something actually changed
+    # Only write when URL differs (from_dict triggers rerun)
     if current != want:
         st.query_params.from_dict(want)
-
 
 def go_to_analysis(symbol: str):
     """Navigate to Stock Analysis page for the given symbol."""
@@ -2983,9 +2982,7 @@ elif page == "🧓 Buffett Portfolio":
 # ═════════════════════════════════════════════════════════════════════════════
 #  URL SYNC — write the current page to the browser URL bar (runs last)
 # ═════════════════════════════════════════════════════════════════════════════
-# Skip if this render was triggered by browser back/forward (URL is already right)
-if not st.session_state.pop("_url_nav_from_browser", False):
-    _url_symbol = ""
-    if page == "🔍 Stock Analysis" and st.session_state.get("_analysis_active"):
-        _url_symbol = st.session_state.get("_sym_main_result", "")
-    _write_url_params(page, _url_symbol)
+_url_symbol = ""
+if page == "🔍 Stock Analysis" and st.session_state.get("_analysis_active"):
+    _url_symbol = st.session_state.get("_sym_main_result", "")
+_write_url_params(page, _url_symbol)
