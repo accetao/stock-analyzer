@@ -319,78 +319,72 @@ def _load_stock_symbols() -> dict:
 
 @st.cache_data(ttl=86400, show_spinner=False)
 def _build_symbol_options() -> list[str]:
-    """Pre-build sorted selectbox options: 'AAPL — Apple Inc.' """
+    """Build searchable dropdown options with BOTH formats so users can
+    type either a ticker prefix ('AAPL') or a company name ('Apple').
+
+    Returns a sorted list containing two entries per stock:
+      - 'AAPL — Apple Inc.'      (matches when typing ticker)
+      - 'Apple Inc. — AAPL'      (matches when typing company name)
+    """
     symbols = _load_stock_symbols()
-    return sorted(f"{t} — {n}" for t, n in symbols.items())
-
-
-def _search_symbols(query: str, limit: int = 12) -> list[str]:
-    """Fuzzy search: match by ticker prefix OR company-name substring."""
-    if not query:
-        return []
-    symbols = _load_stock_symbols()
-    q_upper = query.upper().strip()
-    q_lower = query.lower().strip()
-
-    if q_upper in symbols:
-        return [f"{q_upper} — {symbols[q_upper]}"]
-
-    exact = []
-    name_start = []
-    name_has = []
-
+    opts = set()
     for t, n in symbols.items():
-        if t.startswith(q_upper):
-            exact.append(f"{t} — {n}")
-        elif q_lower in n.lower():
-            if n.lower().startswith(q_lower) or f" {q_lower}" in f" {n.lower()}":
-                name_start.append(f"{t} — {n}")
-            else:
-                name_has.append(f"{t} — {n}")
+        opts.add(f"{t} — {n}")
+        opts.add(f"{n} — {t}")
+    return sorted(opts)
 
-    return (exact + name_start + name_has)[:limit]
+
+def _extract_ticker(option: str) -> str:
+    """Extract the ticker symbol from a display option like
+    'AAPL — Apple Inc.' or 'Apple Inc. — AAPL'."""
+    if not option or " — " not in option:
+        return option.strip().upper() if option else ""
+    left, right = option.split(" — ", 1)
+    left, right = left.strip(), right.strip()
+    syms = _load_stock_symbols()
+    if left.upper() in syms:
+        return left.upper()
+    if right.upper() in syms:
+        return right.upper()
+    return left.upper()
+
+
+def _ticker_option(ticker: str) -> str:
+    """Return the ticker-first display string for a known ticker."""
+    syms = _load_stock_symbols()
+    name = syms.get(ticker.upper(), ticker)
+    return f"{ticker.upper()} — {name}"
 
 
 def symbol_search(label: str = "🔍 Search stock",
                   key: str = "sym",
                   default: str = "AAPL") -> str:
-    """Render a smart symbol search box with autocomplete suggestions.
+    """Searchable stock picker with live autocomplete.
 
+    Uses a single st.selectbox — the user clicks, types a ticker or company
+    name, and sees matching candidates instantly (no Enter key needed).
     Returns the chosen ticker string (e.g. 'AAPL').
     """
-    q_key = f"_{key}_q"
     result_key = f"_{key}_result"
+    options = _build_symbol_options()
 
-    query = st.text_input(
-        label, key=q_key,
-        placeholder="Type ticker or company name  (e.g. AAPL, Apple, Tesla…)",
-        label_visibility="visible",
+    sel = st.selectbox(
+        label, options=options, index=None, key=key,
+        placeholder="Type ticker or company name…",
     )
 
-    if not query:
-        return st.session_state.get(result_key, default)
+    if sel:
+        ticker = _extract_ticker(sel)
+        st.session_state[result_key] = ticker
+        return ticker
 
-    q_upper = query.upper().strip()
-    symbols = _load_stock_symbols()
-
-    if q_upper in symbols:
-        st.session_state[result_key] = q_upper
-        return q_upper
-
-    matches = _search_symbols(query, limit=12)
-    if matches:
-        sel = st.selectbox(
-            "Matches", matches,
-            key=f"_{key}_sel",
-            label_visibility="collapsed",
-        )
-        chosen = sel.split(" — ")[0] if sel else q_upper
-        st.session_state[result_key] = chosen
-        return chosen
-
-    st.caption(f"ℹ️ *\"{q_upper}\" not in database — will be looked up on Yahoo Finance*")
-    st.session_state[result_key] = q_upper
-    return q_upper
+    # Nothing selected yet — use previously stored result or the default
+    stored = st.session_state.get(result_key, "")
+    if stored:
+        return stored
+    if default:
+        st.session_state[result_key] = default
+    return default
 
 
 # ─── AI / LLM Engine ────────────────────────────────────────────────────────
@@ -2086,7 +2080,8 @@ elif page == "⚖️ Compare":
     st.caption("Side-by-side deep analysis — returns, risk, correlation, drawdowns")
 
     _all_opts = _build_symbol_options()
-    _cmp_defaults = [o for o in _all_opts if o.split(" — ")[0] in ("AAPL", "MSFT", "GOOGL", "AMZN")]
+    _cmp_defaults = [_ticker_option(t) for t in ("AAPL", "MSFT", "GOOGL", "AMZN")
+                     if _ticker_option(t) in _all_opts]
     cmp_picks = st.multiselect(
         "🔍 Search & select stocks to compare",
         options=_all_opts,
@@ -2100,7 +2095,7 @@ elif page == "⚖️ Compare":
     cmp_go = st.button("⚖️ Compare", type="primary")
 
     if cmp_go:
-        symbols = [p.split(" — ")[0] for p in cmp_picks]
+        symbols = [_extract_ticker(p) for p in cmp_picks]
         if _cmp_custom:
             symbols += [s.strip().upper() for s in _cmp_custom.split(",") if s.strip()]
 
@@ -2600,7 +2595,7 @@ elif page == "📋 Watchlist":
         _wl_add_custom = st.text_input("Add custom symbols", placeholder="CUSTOM1, CUSTOM2",
                                         key="wl_add_custom")
         if st.button("➕ Add", use_container_width=True):
-            new = [p.split(" — ")[0] for p in _wl_add_picks]
+            new = [_extract_ticker(p) for p in _wl_add_picks]
             if _wl_add_custom:
                 new += [s.strip().upper() for s in _wl_add_custom.split(",") if s.strip()]
             if new:
