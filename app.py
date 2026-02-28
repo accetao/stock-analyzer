@@ -250,6 +250,45 @@ def fmt_pct(val):
     return f"{val*100:.1f}%"
 
 
+# ─── URL Routing ───────────────────────────────────────────────────────────────────────
+_PAGE_TO_SLUG = {
+    "🏠 Dashboard": "dashboard",
+    "🔍 Stock Analysis": "analysis",
+    "🌡️ Market Pulse": "market-pulse",
+    "📊 Screener": "screener",
+    "🏆 Rankings": "rankings",
+    "⚖️ Compare": "compare",
+    "⏳ What-If Machine": "what-if",
+    "💼 Portfolio Tracker": "portfolio",
+    "📋 Watchlist": "watchlist",
+    "🧓 Buffett Portfolio": "buffett",
+}
+_SLUG_TO_PAGE = {v: k for k, v in _PAGE_TO_SLUG.items()}
+
+
+def _sync_url_to_state():
+    """On first load, read ?page= and ?symbol= from the URL and seed session state."""
+    qp = st.query_params
+    slug = qp.get("page", "")
+    sym = qp.get("symbol", "")
+    if slug and slug in _SLUG_TO_PAGE:
+        target = _SLUG_TO_PAGE[slug]
+        if "main_nav" not in st.session_state:
+            st.session_state["main_nav"] = target
+        if slug == "analysis" and sym:
+            if "analyze_symbol" not in st.session_state:
+                st.session_state["analyze_symbol"] = sym.upper()
+
+
+def _sync_state_to_url(page_label: str, symbol: str = ""):
+    """Update the browser URL bar to reflect the current page & symbol."""
+    slug = _PAGE_TO_SLUG.get(page_label, "dashboard")
+    params = {"page": slug}
+    if symbol:
+        params["symbol"] = symbol.upper()
+    st.query_params.update(params)
+
+
 def go_to_analysis(symbol: str):
     """Navigate to Stock Analysis page for the given symbol."""
     st.session_state["analyze_symbol"] = symbol.upper().strip()
@@ -1018,12 +1057,18 @@ with st.sidebar:
                    "📊 Screener", "🏆 Rankings", "⚖️ Compare",
                    "⏳ What-If Machine", "💼 Portfolio Tracker",
                    "📋 Watchlist", "🧓 Buffett Portfolio"]
+    # URL routing: seed state from ?page= on first load
+    _sync_url_to_state()
+
     if "nav_to" in st.session_state:
         st.session_state["main_nav"] = st.session_state.pop("nav_to")
     page = st.radio(
         "Navigation", nav_options, key="main_nav",
         label_visibility="collapsed",
     )
+
+    # Update browser URL to match selected page
+    _sync_state_to_url(page)
 
     st.divider()
     st.caption(f"Data cached for {config.CACHE_EXPIRY_MINUTES} min")
@@ -1269,6 +1314,13 @@ elif page == "🔍 Stock Analysis":
     if auto_run:
         _auto_sym = st.session_state.pop("analyze_symbol")
         st.session_state["_analysis_active"] = True
+    elif not st.session_state.get("_analysis_active"):
+        # Direct link: ?page=analysis&symbol=AAPL
+        _url_sym = st.query_params.get("symbol", "")
+        if _url_sym:
+            _auto_sym = _url_sym.upper()
+            auto_run = True
+            st.session_state["_analysis_active"] = True
 
     col1, col2, col3 = st.columns([2, 1, 1])
     with col1:
@@ -1284,6 +1336,10 @@ elif page == "🔍 Stock Analysis":
         st.session_state["_analysis_active"] = True
 
     _should_analyze = symbol and (analyze_btn or auto_run or st.session_state.get("_analysis_active"))
+
+    # Keep URL bar in sync with the analyzed symbol
+    if symbol and st.session_state.get("_analysis_active"):
+        _sync_state_to_url(page, symbol)
 
     if _should_analyze:
         with st.spinner(f"Analyzing {symbol}..."):
