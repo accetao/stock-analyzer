@@ -28,6 +28,7 @@ output/
 
 # Secrets (never commit API keys)
 .streamlit/secrets.toml
+data/ai_settings.json
 
 # Data cache (keep watchlists)
 data/*.tmp

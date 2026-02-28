@@ -291,6 +291,49 @@ def _get_secret(key: str, default: str = "") -> str:
         return default
 
 
+_AI_SETTINGS_FILE = os.path.join(os.path.dirname(__file__), "data", "ai_settings.json")
+
+
+def _save_ai_settings(api_key: str, base_url: str, model: str) -> bool:
+    """Persist AI settings to a local JSON file so they survive refresh."""
+    import base64
+    try:
+        os.makedirs(os.path.dirname(_AI_SETTINGS_FILE), exist_ok=True)
+        data = {
+            "api_key": base64.b64encode(api_key.encode()).decode(),
+            "base_url": base_url,
+            "model": model,
+        }
+        with open(_AI_SETTINGS_FILE, "w") as f:
+            json.dump(data, f)
+        return True
+    except Exception:
+        return False
+
+
+def _load_ai_settings() -> dict | None:
+    """Load previously saved AI settings. Returns dict or None."""
+    import base64
+    try:
+        with open(_AI_SETTINGS_FILE, "r") as f:
+            data = json.load(f)
+        return {
+            "api_key": base64.b64decode(data["api_key"].encode()).decode(),
+            "base_url": data.get("base_url", ""),
+            "model": data.get("model", "gpt-4o-mini"),
+        }
+    except Exception:
+        return None
+
+
+def _delete_ai_settings() -> None:
+    """Remove saved AI settings file."""
+    try:
+        os.remove(_AI_SETTINGS_FILE)
+    except Exception:
+        pass
+
+
 def get_ai_client():
     """Return an OpenAI-compatible client if API key is configured.
 
@@ -832,8 +875,15 @@ with st.sidebar:
         pass
 
     # Pre-fill defaults BEFORE text_input widgets render
+    # Priority: 1) already in session  2) saved file  3) Ollama  4) Secrets
     if not st.session_state.get("openai_api_key"):
-        if _ollama_running:
+        _saved = _load_ai_settings()
+        if _saved:
+            # Restore from previously saved settings
+            st.session_state["openai_api_key"] = _saved["api_key"]
+            st.session_state["openai_base_url"] = _saved["base_url"]
+            st.session_state["openai_model"] = _saved["model"]
+        elif _ollama_running:
             # Local Ollama available — use it
             _pick = "llama3.2"
             for _m in _ollama_models:
@@ -850,6 +900,8 @@ with st.sidebar:
                 st.session_state["openai_api_key"] = _secret_key
                 st.session_state["openai_base_url"] = _get_secret("OPENAI_BASE_URL")
                 st.session_state["openai_model"] = _get_secret("OPENAI_MODEL", "gpt-4o-mini")
+
+    _has_saved_settings = os.path.exists(_AI_SETTINGS_FILE)
 
     with st.expander("🤖 AI Settings", expanded=False):
         st.caption("Connect any OpenAI-compatible API for live AI insights")
@@ -879,7 +931,7 @@ with st.sidebar:
         st.text_input(
             "API Key", type="password", key="openai_api_key",
             placeholder="sk-... or gsk-... or any compatible key",
-            help="Your key is stored only in this session, never saved.",
+            help="Your key is stored only in this session unless you click Save.",
         )
         st.text_input(
             "Base URL (optional)", key="openai_base_url",
@@ -896,6 +948,36 @@ with st.sidebar:
         if ai_available():
             _src = "Ollama" if _ollama_running else "Cloud API"
             st.success(f"✅ AI engine connected ({_src})")
+
+            # ── Save / Clear / Test buttons ──
+            _btn_cols = st.columns(2)
+            with _btn_cols[0]:
+                if st.button("💾 Save Settings", use_container_width=True,
+                             help="Remember these settings for next time"):
+                    _ok = _save_ai_settings(
+                        st.session_state.get("openai_api_key", ""),
+                        st.session_state.get("openai_base_url", ""),
+                        st.session_state.get("openai_model", ""),
+                    )
+                    if _ok:
+                        st.success("✅ Settings saved!")
+                    else:
+                        st.error("Failed to save settings")
+            with _btn_cols[1]:
+                if _has_saved_settings:
+                    if st.button("🗑️ Clear Saved", use_container_width=True,
+                                 help="Delete saved settings from disk"):
+                        _delete_ai_settings()
+                        st.success("Saved settings cleared")
+                        st.rerun()
+                else:
+                    st.button("📡 Test", use_container_width=True,
+                              key="_test_conn_btn", disabled=True,
+                              help="Save first, then test")
+
+            if _has_saved_settings:
+                st.caption("💾 Settings loaded from saved file")
+
             if st.button("📡 Test Connection", use_container_width=True):
                 with st.spinner("Testing AI connection..."):
                     test_result = call_llm(
