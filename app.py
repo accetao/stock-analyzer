@@ -267,25 +267,35 @@ _SLUG_TO_PAGE = {v: k for k, v in _PAGE_TO_SLUG.items()}
 
 
 def _read_url_params():
-    """Read ?page= and ?symbol= from the browser URL on first load.
+    """Read ?page= and ?symbol= from the browser URL.
 
-    Only seeds session state when main_nav hasn't been set yet (first
-    page load or direct link visit).  Never triggers reruns.
+    Handles two cases:
+      1. First load (no main_nav yet): seed session state from URL.
+      2. Browser back/forward: URL slug differs from current page
+         → update main_nav so the sidebar follows the URL.
+
+    Skipped when programmatic nav (go_to_analysis) is pending.
     """
-    # Programmatic navigation takes priority
     if "nav_to" in st.session_state:
-        return
-    # Only act on first load (before sidebar radio creates main_nav)
-    if "main_nav" in st.session_state:
         return
     qp = st.query_params
     slug = qp.get("page", "")
+    if not slug or slug not in _SLUG_TO_PAGE:
+        return
+    url_page = _SLUG_TO_PAGE[slug]
+    current_page = st.session_state.get("main_nav", "")
+    # If URL page matches current page, nothing to do
+    if url_page == current_page:
+        return
+    # URL differs from session → first load OR browser back/forward
+    st.session_state["main_nav"] = url_page
     sym = qp.get("symbol", "")
-    if slug and slug in _SLUG_TO_PAGE:
-        st.session_state["main_nav"] = _SLUG_TO_PAGE[slug]
-        if slug == "analysis" and sym:
-            st.session_state["analyze_symbol"] = sym.upper()
-            st.session_state["_analysis_active"] = True
+    if slug == "analysis" and sym:
+        st.session_state["analyze_symbol"] = sym.upper()
+        st.session_state["_analysis_active"] = True
+    elif slug != "analysis":
+        # Clear analysis state when navigating away
+        st.session_state.pop("_analysis_active", None)
 
 
 def _write_url_params(page_label: str, symbol: str = ""):
