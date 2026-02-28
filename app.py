@@ -168,31 +168,37 @@ st.markdown("""
         .metric-card { padding: 0.6rem 0.8rem; }
     }
 
-    /* ═══ Dashboard clickable card containers ═══ */
-    [data-testid="stVerticalBlockBorderWrapper"] {
-        transition: border-color 0.2s, box-shadow 0.2s;
+    /* ═══ Dashboard: stock card buttons ═══ */
+    .stock-card-btn .stButton > button {
+        background: linear-gradient(135deg, #fafbfc 60%, #f0f4f8) !important;
+        border: 1px solid #e4e8ec !important;
+        border-radius: 12px !important;
+        padding: 0.65rem 0.85rem !important;
+        min-height: unset !important;
+        height: auto !important;
+        text-align: left !important;
+        cursor: pointer !important;
+        transition: all 0.2s ease !important;
+        box-shadow: 0 1px 3px rgba(0,0,0,0.04) !important;
+        width: 100% !important;
     }
-    [data-testid="stVerticalBlockBorderWrapper"]:hover {
+    .stock-card-btn .stButton > button:hover {
         border-color: #1e88e5 !important;
-        box-shadow: 0 2px 8px rgba(30,136,229,0.15);
+        box-shadow: 0 4px 14px rgba(30,136,229,0.18) !important;
+        transform: translateY(-2px);
+        background: linear-gradient(135deg, #ffffff 60%, #e8f0fe) !important;
     }
-    [data-testid="stVerticalBlockBorderWrapper"] [data-testid="stVerticalBlock"] {
-        gap: 0.15rem !important;
+    .stock-card-btn .stButton > button:active {
+        transform: translateY(0);
+        box-shadow: 0 1px 4px rgba(30,136,229,0.12) !important;
     }
-    [data-testid="stVerticalBlockBorderWrapper"] .stButton > button {
-        padding: 0.1rem 0.4rem !important;
-        min-height: 1.4rem !important;
-        font-size: 0.76rem !important;
-        border: none !important;
-        background: transparent !important;
-        color: #1e88e5 !important;
-        text-align: right !important;
-        opacity: 0.55;
-        justify-content: flex-end;
+    .stock-card-btn .stButton > button p {
+        margin: 0 !important;
+        line-height: 1 !important;
     }
-    [data-testid="stVerticalBlockBorderWrapper"] .stButton > button:hover {
-        opacity: 1;
-        text-decoration: underline;
+    /* Hide default Streamlit button focus ring */
+    .stock-card-btn .stButton > button:focus {
+        box-shadow: 0 0 0 2px rgba(30,136,229,0.25) !important;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -481,24 +487,20 @@ if page == "🏠 Dashboard":
                     change_str = f"{d['change']:+.2f}%" if d['change'] is not None else "N/A"
                     change_color = "#4caf50" if (d['change'] or 0) >= 0 else "#f44336"
                     arrow = "▲" if (d['change'] or 0) >= 0 else "▼"
-                    with st.container(border=True):
-                        st.markdown(
-                            f"<div style='border-left:3px solid {change_color};"
-                            f"padding-left:8px;line-height:1.35'>"
-                            f"<b style='font-size:1.05rem'>{d['symbol']}</b> "
-                            f"<span style='color:#888;font-size:0.75rem'>"
-                            f"{d['name'][:22]}</span><br>"
-                            f"<span style='font-size:1.1rem;font-weight:600'>"
-                            f"${d['price']:.2f}</span>"
-                            f" <span style='color:{change_color};font-weight:600'>"
-                            f"{arrow} {change_str}</span>"
-                            f"</div>",
-                            unsafe_allow_html=True,
-                        )
-                        if st.button("→ Analyze", key=f"dash_{d['symbol']}",
-                                     use_container_width=True):
-                            go_to_analysis(d["symbol"])
-                            st.rerun()
+                    cap_str = fmt_number(d.get('market_cap'), '$')
+                    card_label = (
+                        f"**{d['symbol']}** "
+                        f"&nbsp;·&nbsp; {d['name'][:20]}\n\n"
+                        f"${d['price']:.2f} "
+                        f"&ensp; :{('green' if (d['change'] or 0) >= 0 else 'red')}[{arrow} {change_str}]\n\n"
+                        f"Cap {cap_str}"
+                    )
+                    st.markdown('<div class="stock-card-btn">', unsafe_allow_html=True)
+                    if st.button(card_label, key=f"dash_{d['symbol']}",
+                                 use_container_width=True):
+                        go_to_analysis(d['symbol'])
+                        st.rerun()
+                    st.markdown('</div>', unsafe_allow_html=True)
     else:
         st.info("No watchlist found. Go to 📋 Watchlist to set one up.")
 
