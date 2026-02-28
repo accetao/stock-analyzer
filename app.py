@@ -266,16 +266,55 @@ def csv_download(df, filename, label="📥 Download CSV"):
 # ─── Symbol Search ───────────────────────────────────────────────────────────
 
 _SYMBOLS_PATH = os.path.join(os.path.dirname(__file__), "data", "stock_symbols.json")
+_SYMBOLS_REFRESH_URL = ("https://api.nasdaq.com/api/screener/stocks"
+                        "?tableType=earnings&limit=25000&offset=0")
 
 
 @st.cache_data(ttl=86400, show_spinner=False)
 def _load_stock_symbols() -> dict:
-    """Load the ticker → company-name map from the bundled JSON file."""
+    """Load the ticker → company-name map.  Tries the bundled JSON first;
+    if it is missing or stale (>30 days), fetches a fresh copy from NASDAQ."""
+    symbols = {}
     try:
+        mtime = os.path.getmtime(_SYMBOLS_PATH)
+        age_days = (datetime.now().timestamp() - mtime) / 86400
         with open(_SYMBOLS_PATH, "r") as f:
-            return json.load(f)
+            symbols = json.load(f)
+        if age_days < 30 and len(symbols) > 100:
+            return symbols
     except Exception:
-        return {}
+        pass
+
+    # Refresh from NASDAQ API
+    try:
+        import urllib.request as _ul, re as _re
+        req = _ul.Request(_SYMBOLS_REFRESH_URL,
+                          headers={"User-Agent": "Mozilla/5.0"})
+        resp = _ul.urlopen(req, timeout=30)
+        data = json.loads(resp.read())
+        rows = data.get("data", {}).get("table", {}).get("rows", [])
+        fresh = {}
+        for r in rows:
+            sym = r.get("symbol", "").strip()
+            name = r.get("name", "").strip()
+            if not sym or not name:
+                continue
+            if any(sym.endswith(s) for s in ("W", "WS", "R", "U")) and len(sym) > 3:
+                if "Warrant" in name or "Unit" in name or "Right" in name:
+                    continue
+            name = _re.sub(r"\s*Common Stock$", "", name)
+            name = _re.sub(r"\s*Common Shares$", "", name)
+            name = _re.sub(r"\s*Ordinary Shares$", "", name)
+            name = _re.sub(r"\s*(Class [A-C])$", "", name)
+            fresh[sym] = name.strip()
+        if len(fresh) > 100:
+            os.makedirs(os.path.dirname(_SYMBOLS_PATH), exist_ok=True)
+            with open(_SYMBOLS_PATH, "w") as f:
+                json.dump(dict(sorted(fresh.items())), f, indent=2)
+            return fresh
+    except Exception:
+        pass
+    return symbols
 
 
 @st.cache_data(ttl=86400, show_spinner=False)
@@ -285,7 +324,7 @@ def _build_symbol_options() -> list[str]:
     return sorted(f"{t} — {n}" for t, n in symbols.items())
 
 
-def _search_symbols(query: str, limit: int = 10) -> list[str]:
+def _search_symbols(query: str, limit: int = 12) -> list[str]:
     """Fuzzy search: match by ticker prefix OR company-name substring."""
     if not query:
         return []
@@ -293,19 +332,23 @@ def _search_symbols(query: str, limit: int = 10) -> list[str]:
     q_upper = query.upper().strip()
     q_lower = query.lower().strip()
 
-    # Exact ticker hit → return immediately
     if q_upper in symbols:
         return [f"{q_upper} — {symbols[q_upper]}"]
 
-    ticker_hits = []
-    name_hits = []
+    exact = []
+    name_start = []
+    name_has = []
+
     for t, n in symbols.items():
         if t.startswith(q_upper):
-            ticker_hits.append(f"{t} — {n}")
+            exact.append(f"{t} — {n}")
         elif q_lower in n.lower():
-            name_hits.append(f"{t} — {n}")
-    # Ticker-prefix matches first, then name matches
-    return (ticker_hits + name_hits)[:limit]
+            if n.lower().startswith(q_lower) or f" {q_lower}" in f" {n.lower()}":
+                name_start.append(f"{t} — {n}")
+            else:
+                name_has.append(f"{t} — {n}")
+
+    return (exact + name_start + name_has)[:limit]
 
 
 def symbol_search(label: str = "🔍 Search stock",
@@ -315,7 +358,6 @@ def symbol_search(label: str = "🔍 Search stock",
 
     Returns the chosen ticker string (e.g. 'AAPL').
     """
-    # Initialise the query box with default if first render
     q_key = f"_{key}_q"
     result_key = f"_{key}_result"
 
@@ -331,13 +373,11 @@ def symbol_search(label: str = "🔍 Search stock",
     q_upper = query.upper().strip()
     symbols = _load_stock_symbols()
 
-    # Exact ticker → return right away, no dropdown
     if q_upper in symbols:
         st.session_state[result_key] = q_upper
         return q_upper
 
-    # Fuzzy matches → show a selection list
-    matches = _search_symbols(query, limit=10)
+    matches = _search_symbols(query, limit=12)
     if matches:
         sel = st.selectbox(
             "Matches", matches,
@@ -348,10 +388,12 @@ def symbol_search(label: str = "🔍 Search stock",
         st.session_state[result_key] = chosen
         return chosen
 
-    # No matches in database — treat as custom symbol
     st.caption(f"ℹ️ *\"{q_upper}\" not in database — will be looked up on Yahoo Finance*")
     st.session_state[result_key] = q_upper
-    return q_upper# ─── AI / LLM Engine ────────────────────────────────────────────────────────
+    return q_upper
+
+
+# ─── AI / LLM Engine ────────────────────────────────────────────────────────
 
 def _normalize_base_url(url: str) -> str:
     """Ensure the base URL ends with /v1 and uses 127.0.0.1 instead of localhost.
