@@ -1261,10 +1261,6 @@ with st.sidebar:
 
 if page == "🏠 Dashboard":
     st.markdown("## 🏠 Dashboard")
-    st.markdown("Quick overview of your watchlist stocks.")
-
-    watchlist = utils.load_watchlist("default")
-    cols_per_row = 4
 
     # Quick symbol entry
     col_a, col_b = st.columns([3, 1])
@@ -1280,43 +1276,45 @@ if page == "🏠 Dashboard":
 
     st.divider()
 
-    # Watchlist grid
-    if watchlist:
-        progress = st.progress(0, text="Loading watchlist data...")
-        cards_data = []
-        for i, sym in enumerate(watchlist[:20]):
-            progress.progress((i + 1) / min(len(watchlist), 20),
-                              text=f"Loading {sym}...")
+    # ── Market Indices ──
+    st.markdown("### 📊 Market Overview")
+    _idx_syms = {"S&P 500": "^GSPC", "NASDAQ": "^IXIC", "DOW 30": "^DJI", "Russell 2000": "^RUT"}
+    _idx_cols = st.columns(len(_idx_syms))
+    for _ic, (_name, _isym) in zip(_idx_cols, _idx_syms.items()):
+        with _ic:
             try:
-                info = fetch_info(sym)
-                if info:
-                    price = info.get("currentPrice") or info.get("regularMarketPrice")
-                    prev = info.get("previousClose") or info.get("regularMarketPreviousClose")
-                    change = ((price - prev) / prev * 100) if price and prev else None
-                    cards_data.append({
-                        "symbol": sym,
-                        "name": info.get("shortName", sym),
-                        "price": price,
-                        "change": change,
-                        "market_cap": info.get("marketCap"),
-                        "pe": info.get("trailingPE"),
-                        "sector": info.get("sector", ""),
-                    })
+                _ii = fetch_info(_isym)
+                _ip = _ii.get("regularMarketPrice", 0)
+                _ipc = _ii.get("regularMarketPreviousClose", _ip)
+                _ich = ((_ip - _ipc) / _ipc * 100) if _ipc else 0
+                _icol = "#4caf50" if _ich >= 0 else "#f44336"
+                _iarrow = "▲" if _ich >= 0 else "▼"
+                st.markdown(
+                    f'<div style="background:linear-gradient(135deg,#f8f9fa,#e8f0fe);'
+                    f'border-radius:12px;padding:0.8rem;text-align:center;'
+                    f'border:1px solid #ddd">'
+                    f'<div style="font-size:0.75rem;color:#888">{_name}</div>'
+                    f'<div style="font-size:1.3rem;font-weight:800">{_ip:,.2f}</div>'
+                    f'<div style="color:{_icol};font-weight:700">{_iarrow} {_ich:+.2f}%</div>'
+                    f'</div>',
+                    unsafe_allow_html=True,
+                )
             except Exception:
-                pass
-        progress.empty()
+                st.metric(_name, "N/A")
 
-        # Display as grid
-        for row_start in range(0, len(cards_data), cols_per_row):
+    st.divider()
+
+    # ── Helper: render a row of stock cards ──
+    def _render_stock_cards(stocks_data, key_prefix, cols_per_row=4):
+        for row_start in range(0, len(stocks_data), cols_per_row):
             cols = st.columns(cols_per_row)
             for j, col in enumerate(cols):
                 idx = row_start + j
-                if idx >= len(cards_data):
+                if idx >= len(stocks_data):
                     break
-                d = cards_data[idx]
+                d = stocks_data[idx]
                 with col:
                     change_str = f"{d['change']:+.2f}%" if d['change'] is not None else "N/A"
-                    change_color = "#4caf50" if (d['change'] or 0) >= 0 else "#f44336"
                     arrow = "▲" if (d['change'] or 0) >= 0 else "▼"
                     cap_str = fmt_number(d.get('market_cap'), '$')
                     card_label = (
@@ -1326,12 +1324,141 @@ if page == "🏠 Dashboard":
                         f"&ensp; :{('green' if (d['change'] or 0) >= 0 else 'red')}[{arrow} {change_str}]\n\n"
                         f"Cap {cap_str}"
                     )
-                    st.markdown('<div class="stock-card-btn">', unsafe_allow_html=True)
-                    if st.button(card_label, key=f"dash_{d['symbol']}",
+                    if st.button(card_label, key=f"{key_prefix}_{d['symbol']}",
                                  use_container_width=True):
                         go_to_analysis(d['symbol'])
                         st.rerun()
-                    st.markdown('</div>', unsafe_allow_html=True)
+
+    # ── Helper: fetch stock card data for a list of symbols ──
+    @st.cache_data(ttl=900, show_spinner=False)
+    def _fetch_cards(symbols_tuple):
+        cards = []
+        for sym in symbols_tuple:
+            try:
+                info = fetch_info(sym)
+                if info:
+                    price = info.get("currentPrice") or info.get("regularMarketPrice")
+                    prev = info.get("previousClose") or info.get("regularMarketPreviousClose")
+                    change = ((price - prev) / prev * 100) if price and prev else None
+                    if price:
+                        cards.append({
+                            "symbol": sym,
+                            "name": info.get("shortName", sym)[:25],
+                            "price": price,
+                            "change": change,
+                            "market_cap": info.get("marketCap"),
+                            "sector": info.get("sector", ""),
+                        })
+            except Exception:
+                pass
+        return cards
+
+    # ── Top Movers (gainers / losers / most active) ──
+    st.markdown("### 🔥 Today's Market Movers")
+    _movers_universe = [
+        "AAPL", "MSFT", "GOOGL", "AMZN", "META", "NVDA", "TSLA", "AMD",
+        "JPM", "BAC", "V", "MA", "JNJ", "UNH", "PFE", "LLY", "ABBV",
+        "WMT", "PG", "KO", "HD", "MCD", "NKE", "DIS", "NFLX",
+        "XOM", "CVX", "COP", "CAT", "BA", "GE", "UPS", "HON",
+        "CRM", "ADBE", "ORCL", "AVGO", "QCOM", "INTC", "MU", "AMAT",
+        "GS", "MS", "BLK", "SCHW", "AXP", "C", "WFC",
+        "COST", "TGT", "SBUX", "LULU", "CMG",
+        "CRWD", "PLTR", "SNOW", "DDOG", "NET", "COIN", "SHOP", "SQ",
+    ]
+
+    with st.spinner("Loading market movers..."):
+        _movers_data = _fetch_cards(tuple(_movers_universe))
+
+    if _movers_data:
+        _sorted_by_change = sorted(
+            [d for d in _movers_data if d["change"] is not None],
+            key=lambda x: x["change"], reverse=True,
+        )
+        _top_gainers = _sorted_by_change[:8]
+        _top_losers = _sorted_by_change[-8:][::-1]  # worst first
+
+        _mover_tab1, _mover_tab2 = st.tabs(["📈 Top Gainers", "📉 Top Losers"])
+        with _mover_tab1:
+            if _top_gainers:
+                _render_stock_cards(_top_gainers, "gain")
+            else:
+                st.info("No data available")
+        with _mover_tab2:
+            if _top_losers:
+                _render_stock_cards(_top_losers, "lose")
+            else:
+                st.info("No data available")
+
+    st.divider()
+
+    # ── Browse by Sector ──
+    st.markdown("### 🏢 Browse by Sector")
+    _SECTOR_STOCKS = {
+        "Technology": ["AAPL", "MSFT", "NVDA", "AVGO", "ORCL", "CRM", "ADBE", "AMD", "INTC", "CSCO", "QCOM", "TXN", "MU", "AMAT", "NOW", "PLTR", "CRWD", "PANW", "SNOW", "NET"],
+        "Financials": ["JPM", "BAC", "WFC", "GS", "MS", "V", "MA", "AXP", "BLK", "C", "SCHW", "PGR", "CME", "ICE", "CB", "COF", "MET", "AIG", "ALL", "TRV"],
+        "Healthcare": ["UNH", "JNJ", "LLY", "ABBV", "MRK", "PFE", "TMO", "ABT", "BMY", "AMGN", "ISRG", "SYK", "BSX", "REGN", "VRTX", "DXCM", "HCA", "EW", "IDXX", "BIIB"],
+        "Consumer Disc.": ["AMZN", "TSLA", "HD", "MCD", "NKE", "SBUX", "DIS", "LULU", "CMG", "BKNG", "TJX", "ROST", "ORLY", "AZO", "DPZ", "RCL", "MAR", "HLT", "ABNB", "ETSY"],
+        "Consumer Staples": ["WMT", "PG", "KO", "PEP", "COST", "PM", "MO", "CL", "KMB", "GIS", "HSY", "MNST", "KDP", "KR", "STZ", "SJM", "CAG", "CPB", "MDLZ", "ADM"],
+        "Energy": ["XOM", "CVX", "COP", "SLB", "EOG", "MPC", "VLO", "PSX", "OXY", "DVN", "HAL", "BKR", "FANG", "HES", "CTRA", "KMI", "WMB", "OKE", "LNG", "TRGP"],
+        "Industrials": ["CAT", "BA", "HON", "UPS", "GE", "LMT", "RTX", "DE", "MMM", "EMR", "ETN", "ITW", "FDX", "NSC", "UNP", "GD", "NOC", "WM", "URI", "PWR"],
+        "Real Estate": ["PLD", "AMT", "EQIX", "CCI", "O", "SPG", "PSA", "WELL", "DLR", "AVB"],
+        "Utilities": ["NEE", "DUK", "SO", "D", "AEP", "SRE", "EXC", "XEL", "ED", "WEC"],
+        "Materials": ["LIN", "APD", "SHW", "ECL", "FCX", "NUE", "VMC", "MLM", "DOW", "PPG"],
+        "Communication": ["META", "GOOGL", "NFLX", "DIS", "CMCSA", "VZ", "T", "CHTR", "EA", "TTWO"],
+    }
+
+    _sector_names = list(_SECTOR_STOCKS.keys())
+    _selected_sector = st.pills("Sector", _sector_names, default=_sector_names[0],
+                                 key="dash_sector")
+
+    if _selected_sector and _selected_sector in _SECTOR_STOCKS:
+        _sec_syms = _SECTOR_STOCKS[_selected_sector]
+
+        # Paginate: show N at a time with "Show more" button
+        _sec_page_key = f"_dash_sec_page_{_selected_sector}"
+        _sec_page = st.session_state.get(_sec_page_key, 1)
+        _per_page = 8
+        _show_syms = _sec_syms[:_sec_page * _per_page]
+
+        with st.spinner(f"Loading {_selected_sector} stocks..."):
+            _sec_cards = _fetch_cards(tuple(_show_syms))
+
+        if _sec_cards:
+            _render_stock_cards(_sec_cards, f"sec_{_selected_sector[:4]}")
+
+            # Show more button
+            if len(_show_syms) < len(_sec_syms):
+                _remaining = len(_sec_syms) - len(_show_syms)
+                if st.button(f"Show {min(_remaining, _per_page)} more {_selected_sector} stocks ↓",
+                             use_container_width=True, key="sec_more"):
+                    st.session_state[_sec_page_key] = _sec_page + 1
+                    st.rerun()
+        else:
+            st.info(f"Loading {_selected_sector} stocks...")
+
+    st.divider()
+
+    # ── Your Watchlist ──
+    st.markdown("### ⭐ Your Watchlist")
+    watchlist = utils.load_watchlist("default")
+    if watchlist:
+        _wl_page_key = "_dash_wl_page"
+        _wl_page = st.session_state.get(_wl_page_key, 1)
+        _wl_per_page = 8
+        _wl_show = watchlist[:_wl_page * _wl_per_page]
+
+        with st.spinner("Loading watchlist..."):
+            _wl_cards = _fetch_cards(tuple(_wl_show))
+
+        if _wl_cards:
+            _render_stock_cards(_wl_cards, "wl")
+
+            if len(_wl_show) < len(watchlist):
+                _wl_remaining = len(watchlist) - len(_wl_show)
+                if st.button(f"Show {min(_wl_remaining, _wl_per_page)} more watchlist stocks ↓",
+                             use_container_width=True, key="wl_more"):
+                    st.session_state[_wl_page_key] = _wl_page + 1
+                    st.rerun()
     else:
         st.info("No watchlist found. Go to 📋 Watchlist to set one up.")
 
