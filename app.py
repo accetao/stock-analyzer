@@ -1088,7 +1088,9 @@ with st.sidebar:
     )
 
     # Update browser URL to match selected page
-    _sync_state_to_url(page)
+    # Skip for Stock Analysis — that page sets its own URL with the symbol
+    if page != "🔍 Stock Analysis":
+        _sync_state_to_url(page)
 
     st.divider()
     st.caption(f"Data cached for {config.CACHE_EXPIRY_MINUTES} min")
