@@ -249,6 +249,13 @@ def go_to_analysis(symbol: str):
     st.session_state["nav_to"] = "🔍 Stock Analysis"
 
 
+def csv_download(df, filename, label="📥 Download CSV"):
+    """Render a CSV download button for a DataFrame."""
+    csv = df.to_csv(index=False)
+    st.download_button(label, csv, file_name=filename,
+                       mime="text/csv", use_container_width=True)
+
+
 @st.cache_data(ttl=900, show_spinner=False)
 def fetch_history(symbol, period, interval="1d"):
     return data_fetcher.get_history(symbol, period=period, interval=interval)
@@ -451,6 +458,12 @@ def generate_ai_narrative(symbol, info, result, signals, trend_data, metrics):
                      "If you're considering buying, wait for improvement in key metrics.")
 
     return "\n\n".join(paras)
+
+
+# ─── Interactive Plotly Charts ───────────────────────────────────────────────
+
+def create_price_chart(df, symbol, show_sma=True, show_bb=True,
+                       show_volume=True, show_rsi=True, show_macd=True):
     """Build a multi-panel Plotly chart."""
     if "SMA_20" not in df.columns:
         ta.add_all_indicators(df)
@@ -592,8 +605,8 @@ with st.sidebar:
 
     nav_options = ["🏠 Dashboard", "🔍 Stock Analysis", "🌡️ Market Pulse",
                    "📊 Screener", "🏆 Rankings", "⚖️ Compare",
-                   "⏳ What-If Machine", "📋 Watchlist",
-                   "🧓 Buffett Portfolio"]
+                   "⏳ What-If Machine", "� Portfolio Tracker",
+                   "📋 Watchlist", "🧓 Buffett Portfolio"]
     if "nav_to" in st.session_state:
         st.session_state["main_nav"] = st.session_state.pop("nav_to")
     page = st.radio(
@@ -1302,7 +1315,9 @@ elif page == "📊 Screener":
                         "Sector": r.get("sector", ""),
                         "Reasons": ", ".join(r.get("reasons", [])),
                     })
-                st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+                scr_df = pd.DataFrame(rows)
+                st.dataframe(scr_df, use_container_width=True, hide_index=True)
+                csv_download(scr_df, "screener_results.csv")
 
                 # Compact clickable symbol pills
                 _syms = [r["symbol"] for r in results]
@@ -1394,7 +1409,9 @@ elif page == "🏆 Rankings":
                         "Momentum": r.get("momentum_score", "N/A"),
                         "Direction": r.get("trend_direction", ""),
                     })
-                st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+                rank_df = pd.DataFrame(rows)
+                st.dataframe(rank_df, use_container_width=True, hide_index=True)
+                csv_download(rank_df, "stock_rankings.csv")
 
                 # Compact clickable symbol pills
                 _rsyms = [r["symbol"] for r in ranked]
@@ -1461,8 +1478,9 @@ elif page == "⚖️ Compare":
                             "Best Day": f"{c.pct_change().max()*100:+.2f}%",
                             "Worst Day": f"{c.pct_change().min()*100:+.2f}%",
                         })
-                    st.dataframe(pd.DataFrame(ret_rows), use_container_width=True,
-                                 hide_index=True)
+                    ret_df = pd.DataFrame(ret_rows)
+                    st.dataframe(ret_df, use_container_width=True, hide_index=True)
+                    csv_download(ret_df, "comparison_returns.csv")
 
                 # TAB: Risk & Volatility
                 with cmp_tab2:
@@ -1704,6 +1722,201 @@ elif page == "⏳ What-If Machine":
 
 
 # ═════════════════════════════════════════════════════════════════════════════
+#  PAGE: Portfolio Tracker
+# ═════════════════════════════════════════════════════════════════════════════
+
+elif page == "💼 Portfolio Tracker":
+    st.markdown("## 💼 Portfolio Tracker")
+    st.markdown("Track your real investments — see live P&L, allocation, and performance")
+
+    # Initialize portfolio in session state
+    if "portfolio" not in st.session_state:
+        st.session_state["portfolio"] = [
+            {"symbol": "AAPL", "shares": 10, "buy_price": 150.00},
+            {"symbol": "MSFT", "shares": 5, "buy_price": 300.00},
+            {"symbol": "GOOGL", "shares": 8, "buy_price": 140.00},
+        ]
+
+    # ── Add/Remove holdings ──
+    with st.expander("✏️ Edit Holdings", expanded=False):
+        pe1, pe2, pe3, pe4 = st.columns([2, 1, 1, 1])
+        with pe1:
+            pf_sym = st.text_input("Symbol", "NVDA", key="pf_add_sym").upper().strip()
+        with pe2:
+            pf_shares = st.number_input("Shares", min_value=0.01, value=10.0,
+                                         step=1.0, key="pf_add_shares")
+        with pe3:
+            pf_cost = st.number_input("Avg cost ($)", min_value=0.01, value=100.0,
+                                       step=1.0, key="pf_add_cost")
+        with pe4:
+            st.markdown("<br>", unsafe_allow_html=True)
+            if st.button("➕ Add", use_container_width=True, key="pf_add_btn"):
+                st.session_state["portfolio"].append({
+                    "symbol": pf_sym, "shares": pf_shares, "buy_price": pf_cost
+                })
+                st.success(f"Added {pf_shares} shares of {pf_sym}")
+                st.rerun()
+
+        # Show remove buttons for each holding
+        if st.session_state["portfolio"]:
+            st.markdown("**Current holdings:**")
+            for idx, h in enumerate(st.session_state["portfolio"]):
+                rc1, rc2 = st.columns([4, 1])
+                with rc1:
+                    st.caption(f"{h['symbol']} — {h['shares']} shares @ ${h['buy_price']:.2f}")
+                with rc2:
+                    if st.button("🗑️", key=f"pf_rm_{idx}"):
+                        st.session_state["portfolio"].pop(idx)
+                        st.rerun()
+
+    portfolio = st.session_state["portfolio"]
+
+    if not portfolio:
+        st.info("Your portfolio is empty. Add some holdings above!")
+    else:
+        # ── Fetch live data ──
+        with st.spinner("Fetching live portfolio data..."):
+            pf_rows = []
+            total_cost = 0
+            total_value = 0
+            sector_alloc = {}
+
+            for h in portfolio:
+                try:
+                    info = fetch_info(h["symbol"])
+                    live_price = info.get("currentPrice") or info.get("regularMarketPrice", 0)
+                    cost_basis = h["shares"] * h["buy_price"]
+                    market_val = h["shares"] * live_price
+                    pnl = market_val - cost_basis
+                    pnl_pct = (pnl / cost_basis * 100) if cost_basis > 0 else 0
+                    total_cost += cost_basis
+                    total_value += market_val
+                    sec = info.get("sector", "Other")
+                    sector_alloc[sec] = sector_alloc.get(sec, 0) + market_val
+
+                    pf_rows.append({
+                        "Symbol": h["symbol"],
+                        "Name": info.get("shortName", "")[:25],
+                        "Shares": h["shares"],
+                        "Avg Cost": f"${h['buy_price']:.2f}",
+                        "Price": f"${live_price:.2f}",
+                        "Cost Basis": f"${cost_basis:,.2f}",
+                        "Market Value": f"${market_val:,.2f}",
+                        "P&L": f"${pnl:+,.2f}",
+                        "P&L %": f"{pnl_pct:+.1f}%",
+                        "Sector": sec,
+                        "_pnl": pnl,
+                        "_value": market_val,
+                    })
+                except Exception:
+                    pf_rows.append({
+                        "Symbol": h["symbol"], "Name": "Error",
+                        "Shares": h["shares"],
+                        "Avg Cost": f"${h['buy_price']:.2f}",
+                        "Price": "N/A", "Cost Basis": "N/A",
+                        "Market Value": "N/A", "P&L": "N/A",
+                        "P&L %": "N/A", "Sector": "",
+                        "_pnl": 0, "_value": 0,
+                    })
+
+        total_pnl = total_value - total_cost
+        total_pnl_pct = (total_pnl / total_cost * 100) if total_cost > 0 else 0
+        pnl_color = "#4caf50" if total_pnl >= 0 else "#f44336"
+        pnl_emoji = "📈" if total_pnl >= 0 else "📉"
+
+        # ── Hero card ──
+        st.markdown(
+            f'<div style="background:linear-gradient(135deg,#f8f9fa,#e8f0fe);'
+            f'border-radius:16px;padding:1.2rem;border:2px solid {pnl_color};'
+            f'text-align:center;margin-bottom:1rem">'
+            f'<div style="font-size:0.9rem;color:#666">Total Portfolio Value</div>'
+            f'<div style="font-size:2.5rem;font-weight:900">${total_value:,.2f}</div>'
+            f'<div style="font-size:1.2rem;color:{pnl_color};font-weight:700">'
+            f'{pnl_emoji} {total_pnl:+,.2f} ({total_pnl_pct:+.1f}%)</div>'
+            f'</div>',
+            unsafe_allow_html=True,
+        )
+
+        pm1, pm2, pm3, pm4 = st.columns(4)
+        pm1.metric("Total Invested", f"${total_cost:,.2f}")
+        pm2.metric("Current Value", f"${total_value:,.2f}")
+        pm3.metric("Total P&L", f"${total_pnl:+,.2f}")
+        pm4.metric("Holdings", len(portfolio))
+
+        st.divider()
+
+        # ── Charts row ──
+        pc1, pc2 = st.columns([1, 1])
+
+        with pc1:
+            st.markdown("#### Allocation by Stock")
+            alloc_labels = [r["Symbol"] for r in pf_rows if r["_value"] > 0]
+            alloc_values = [r["_value"] for r in pf_rows if r["_value"] > 0]
+            if alloc_labels:
+                fig_alloc = go.Figure(go.Pie(
+                    labels=alloc_labels, values=alloc_values,
+                    hole=0.4, textinfo="label+percent",
+                    textposition="outside",
+                ))
+                fig_alloc.update_layout(
+                    height=320, margin=dict(l=20, r=20, t=10, b=10),
+                    showlegend=False,
+                )
+                st.plotly_chart(fig_alloc, use_container_width=True)
+
+        with pc2:
+            st.markdown("#### Allocation by Sector")
+            if sector_alloc:
+                fig_sec = go.Figure(go.Pie(
+                    labels=list(sector_alloc.keys()),
+                    values=list(sector_alloc.values()),
+                    hole=0.4, textinfo="label+percent",
+                    textposition="outside",
+                ))
+                fig_sec.update_layout(
+                    height=320, margin=dict(l=20, r=20, t=10, b=10),
+                    showlegend=False,
+                )
+                st.plotly_chart(fig_sec, use_container_width=True)
+
+        # ── P&L bar chart ──
+        st.markdown("#### P&L by Holding")
+        pnl_syms = [r["Symbol"] for r in pf_rows]
+        pnl_vals = [r["_pnl"] for r in pf_rows]
+        pnl_colors = ["#4caf50" if v >= 0 else "#f44336" for v in pnl_vals]
+        fig_pnl = go.Figure(go.Bar(
+            x=pnl_syms, y=pnl_vals,
+            marker_color=pnl_colors,
+            text=[f"${v:+,.0f}" for v in pnl_vals],
+            textposition="outside",
+        ))
+        fig_pnl.update_layout(
+            height=300, template="plotly_white",
+            yaxis_title="P&L ($)",
+            margin=dict(l=60, r=30, t=20, b=40),
+        )
+        st.plotly_chart(fig_pnl, use_container_width=True)
+
+        st.divider()
+
+        # ── Holdings table ──
+        st.markdown("#### Holdings Detail")
+        display_rows = [{k: v for k, v in r.items() if not k.startswith("_")} for r in pf_rows]
+        pf_df = pd.DataFrame(display_rows)
+        st.dataframe(pf_df, use_container_width=True, hide_index=True)
+        csv_download(pf_df, "my_portfolio.csv")
+
+        # Quick-analyze pills
+        pf_syms = [h["symbol"] for h in portfolio]
+        selected = st.pills("🔍 Analyze holding", pf_syms,
+                            default=None, key="pf_pill")
+        if selected:
+            del st.session_state["pf_pill"]
+            go_to_analysis(selected)
+            st.rerun()
+
+
+# ═════════════════════════════════════════════════════════════════════════════
 #  PAGE: Watchlist
 # ═════════════════════════════════════════════════════════════════════════════
 
@@ -1757,7 +1970,9 @@ elif page == "📋 Watchlist":
                 except Exception:
                     wl_data.append({"Symbol": sym, "Name": "Error", "Price": "N/A",
                                     "Change": "N/A", "Sector": "", "Market Cap": "N/A"})
-            st.dataframe(pd.DataFrame(wl_data), use_container_width=True, hide_index=True)
+            wl_df = pd.DataFrame(wl_data)
+            st.dataframe(wl_df, use_container_width=True, hide_index=True)
+            csv_download(wl_df, "watchlist.csv")
 
             # Compact clickable symbol pills
             selected = st.pills("🔍 Quick analyze", watchlist,
@@ -1907,7 +2122,9 @@ elif page == "🧓 Buffett Portfolio":
         table_rows.append(row)
     progress.empty()
 
-    st.dataframe(pd.DataFrame(table_rows), use_container_width=True, hide_index=True)
+    buff_df = pd.DataFrame(table_rows)
+    st.dataframe(buff_df, use_container_width=True, hide_index=True)
+    csv_download(buff_df, "buffett_portfolio.csv")
 
     # Quick-analyze pills
     buff_syms = [h["symbol"] for h in BUFFETT_HOLDINGS]
