@@ -270,6 +270,54 @@ _SYMBOLS_REFRESH_URL = ("https://api.nasdaq.com/api/screener/stocks"
                         "?tableType=earnings&limit=25000&offset=0")
 
 
+def _is_valid_stock(ticker: str, name: str) -> bool:
+    """Return False for non-common-stock instruments that should be excluded."""
+    nl = name.lower()
+    # Preferred stocks (^ in ticker like MS^F, MFA^C)
+    if "^" in ticker:
+        return False
+    # Warrants / rights / units by ticker suffix
+    if len(ticker) > 3 and any(ticker.endswith(s) for s in ("W", "WS", "R", "U")):
+        if any(w in name for w in ("Warrant", "Unit", "Right")):
+            return False
+    # Preferred / depositary preferred by name
+    if "preferred stock" in nl or "preferred share" in nl:
+        return False
+    if "preferred securities" in nl or "preferred unit" in nl:
+        return False
+    if "cumulative redeemable" in nl or "cumulative trust" in nl:
+        return False
+    if "cumulative monthly income" in nl:
+        return False
+    if "depositary share" in nl and any(x in nl for x in ("1/1000", "1/1,000", "preferred", "interest in")):
+        return False
+    if "depository share" in nl and any(x in nl for x in ("1/1000", "1/1,000", "preferred", "interest in")):
+        return False
+    # Subordinated notes / debentures / junior debt
+    if "subordinated note" in nl or "subordinated debenture" in nl:
+        return False
+    if "junior subordinated" in nl:
+        return False
+    if "perpetual subordinated" in nl:
+        return False
+    # Warrants / rights by name
+    if "warrant" in nl:
+        return False
+    if "subscription right" in nl or "contingent value right" in nl:
+        return False
+    # Units
+    if nl.endswith(" units"):
+        return False
+    # Blank-check / SPAC shells
+    if "blank check" in nl:
+        return False
+    if "acquisition corp" in nl or "acquisition inc" in nl:
+        return False
+    if "merger corp" in nl or "merger sub" in nl:
+        return False
+    return True
+
+
 @st.cache_data(ttl=86400, show_spinner=False)
 def _load_stock_symbols() -> dict:
     """Load the ticker → company-name map.  Tries the bundled JSON first;
@@ -299,34 +347,7 @@ def _load_stock_symbols() -> dict:
             name = r.get("name", "").strip()
             if not sym or not name:
                 continue
-            # --- Filter out non-common-stock instruments ---
-            nl = name.lower()
-            # Preferred stocks (^ in ticker like MS^F)
-            if "^" in sym:
-                continue
-            # Warrants, rights, units by suffix
-            if any(sym.endswith(s) for s in ("W", "WS", "R", "U")) and len(sym) > 3:
-                if "Warrant" in name or "Unit" in name or "Right" in name:
-                    continue
-            # Preferred / depositary preferred by name
-            if "preferred stock" in nl:
-                continue
-            if "depositary shares" in nl and ("1/1000" in nl or "preferred" in nl or "interest in" in nl):
-                continue
-            # Warrants / rights by name
-            if "warrant" in nl:
-                continue
-            if "subscription right" in nl or "contingent value right" in nl:
-                continue
-            # Units
-            if nl.endswith(" units"):
-                continue
-            # Blank-check / SPAC shells
-            if "blank check" in nl:
-                continue
-            if "acquisition corp" in nl or "acquisition inc" in nl:
-                continue
-            if "merger corp" in nl or "merger sub" in nl:
+            if not _is_valid_stock(sym, name):
                 continue
             # --- Clean company name ---
             name = _re.sub(r"\s*Common Stock$", "", name)
@@ -341,7 +362,8 @@ def _load_stock_symbols() -> dict:
             return fresh
     except Exception:
         pass
-    return symbols
+    # Final safety filter — always strip non-stock instruments
+    return {t: n for t, n in symbols.items() if _is_valid_stock(t, n)}
 
 
 @st.cache_data(ttl=86400, show_spinner=False)
