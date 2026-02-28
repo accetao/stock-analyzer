@@ -265,22 +265,6 @@ _PAGE_TO_SLUG = {
 }
 _SLUG_TO_PAGE = {v: k for k, v in _PAGE_TO_SLUG.items()}
 
-# ── Browser back/forward support ──
-# Streamlit's popstate handler only reacts to page PATH changes, not query
-# param changes.  Since our routing uses ?page=, pressing back/forward
-# changes the URL but Streamlit ignores it.  We embed a tiny iframe with
-# allow-same-origin so its JS can access the parent window and register
-# a popstate listener that forces a full page reload.
-st.markdown(
-    '<iframe srcdoc=\'<script>'
-    'try{var p=parent;if(!p.__saPop){p.__saPop=1;'
-    'p.addEventListener(&quot;popstate&quot;,function(){p.location.reload()})}}'
-    'catch(e){}</script>\' '
-    'sandbox="allow-scripts allow-same-origin" '
-    'style="display:none" height="0" width="0"></iframe>',
-    unsafe_allow_html=True,
-)
-
 
 def _read_url_params():
     """Detect browser back/forward or first load from URL params.
