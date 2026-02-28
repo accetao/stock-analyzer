@@ -167,6 +167,33 @@ st.markdown("""
         /* Dashboard stock cards: tighter padding */
         .metric-card { padding: 0.6rem 0.8rem; }
     }
+
+    /* ═══ Dashboard clickable card containers ═══ */
+    [data-testid="stVerticalBlockBorderWrapper"] {
+        transition: border-color 0.2s, box-shadow 0.2s;
+    }
+    [data-testid="stVerticalBlockBorderWrapper"]:hover {
+        border-color: #1e88e5 !important;
+        box-shadow: 0 2px 8px rgba(30,136,229,0.15);
+    }
+    [data-testid="stVerticalBlockBorderWrapper"] [data-testid="stVerticalBlock"] {
+        gap: 0.15rem !important;
+    }
+    [data-testid="stVerticalBlockBorderWrapper"] .stButton > button {
+        padding: 0.1rem 0.4rem !important;
+        min-height: 1.4rem !important;
+        font-size: 0.76rem !important;
+        border: none !important;
+        background: transparent !important;
+        color: #1e88e5 !important;
+        text-align: right !important;
+        opacity: 0.55;
+        justify-content: flex-end;
+    }
+    [data-testid="stVerticalBlockBorderWrapper"] .stButton > button:hover {
+        opacity: 1;
+        text-decoration: underline;
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -454,18 +481,24 @@ if page == "🏠 Dashboard":
                     change_str = f"{d['change']:+.2f}%" if d['change'] is not None else "N/A"
                     change_color = "#4caf50" if (d['change'] or 0) >= 0 else "#f44336"
                     arrow = "▲" if (d['change'] or 0) >= 0 else "▼"
-                    st.markdown(f"""
-                    <div style="background:#f8f9fa;border-radius:10px;padding:0.8rem 1rem;
-                                border-left:4px solid {change_color};margin-bottom:4px">
-                        <div style="font-weight:700;font-size:1.05rem">{d['symbol']}</div>
-                        <div style="color:#666;font-size:0.78rem;margin-bottom:4px">{d['name'][:28]}</div>
-                        <div style="font-size:1.15rem;font-weight:600">${d['price']:.2f}</div>
-                        <div style="color:{change_color};font-weight:600">{arrow} {change_str}</div>
-                    </div>""", unsafe_allow_html=True)
-                    if st.button(f"🔍 Analyze", key=f"dash_{d['symbol']}",
-                                 use_container_width=True):
-                        go_to_analysis(d["symbol"])
-                        st.rerun()
+                    with st.container(border=True):
+                        st.markdown(
+                            f"<div style='border-left:3px solid {change_color};"
+                            f"padding-left:8px;line-height:1.35'>"
+                            f"<b style='font-size:1.05rem'>{d['symbol']}</b> "
+                            f"<span style='color:#888;font-size:0.75rem'>"
+                            f"{d['name'][:22]}</span><br>"
+                            f"<span style='font-size:1.1rem;font-weight:600'>"
+                            f"${d['price']:.2f}</span>"
+                            f" <span style='color:{change_color};font-weight:600'>"
+                            f"{arrow} {change_str}</span>"
+                            f"</div>",
+                            unsafe_allow_html=True,
+                        )
+                        if st.button("→ Analyze", key=f"dash_{d['symbol']}",
+                                     use_container_width=True):
+                            go_to_analysis(d["symbol"])
+                            st.rerun()
     else:
         st.info("No watchlist found. Go to 📋 Watchlist to set one up.")
 
@@ -755,18 +788,14 @@ elif page == "📊 Screener":
                     })
                 st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
 
-                # Quick-analyze links
-                st.markdown("##### 🔍 Click to analyze:")
+                # Compact clickable symbol pills
                 _syms = [r["symbol"] for r in results]
-                for _rs in range(0, len(_syms), 6):
-                    _bcols = st.columns(6)
-                    for _j, _bc in enumerate(_bcols):
-                        _idx = _rs + _j
-                        if _idx < len(_syms):
-                            with _bc:
-                                if st.button(_syms[_idx], key=f"scr_{_syms[_idx]}"):
-                                    go_to_analysis(_syms[_idx])
-                                    st.rerun()
+                selected = st.pills("🔍 Quick analyze", _syms,
+                                    default=None, key="scr_pill")
+                if selected:
+                    del st.session_state["scr_pill"]
+                    go_to_analysis(selected)
+                    st.rerun()
             else:
                 st.warning("No stocks matched. Try a different strategy.")
         else:
@@ -851,18 +880,14 @@ elif page == "🏆 Rankings":
                     })
                 st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
 
-                # Quick-analyze links
-                st.markdown("##### 🔍 Click to analyze:")
+                # Compact clickable symbol pills
                 _rsyms = [r["symbol"] for r in ranked]
-                for _rs in range(0, len(_rsyms), 6):
-                    _bcols = st.columns(6)
-                    for _j, _bc in enumerate(_bcols):
-                        _idx = _rs + _j
-                        if _idx < len(_rsyms):
-                            with _bc:
-                                if st.button(_rsyms[_idx], key=f"rank_{_rsyms[_idx]}"):
-                                    go_to_analysis(_rsyms[_idx])
-                                    st.rerun()
+                selected = st.pills("🔍 Quick analyze", _rsyms,
+                                    default=None, key="rank_pill")
+                if selected:
+                    del st.session_state["rank_pill"]
+                    go_to_analysis(selected)
+                    st.rerun()
             else:
                 st.warning("No stocks could be scored.")
         else:
@@ -918,7 +943,8 @@ elif page == "⚖️ Compare":
                             st.markdown(f"- Fund: {result.get('fundamental_score', 'N/A')}")
                             st.markdown(f"- Trend: {result.get('trend_score', 'N/A')}")
                             st.markdown(f"- Mom: {result.get('momentum_score', 'N/A')}")
-                            if st.button(f"🔍 Full Analysis", key=f"cmp_{sym}"):
+                            if st.button(f"→ Full Analysis", key=f"cmp_{sym}",
+                                         type="tertiary"):
                                 go_to_analysis(sym)
                                 st.rerun()
 
@@ -979,16 +1005,12 @@ elif page == "📋 Watchlist":
                                     "Change": "N/A", "Sector": "", "Market Cap": "N/A"})
             st.dataframe(pd.DataFrame(wl_data), use_container_width=True, hide_index=True)
 
-            # Quick-analyze links
-            st.markdown("##### 🔍 Click to analyze:")
-            for _rs in range(0, len(watchlist), 6):
-                _bcols = st.columns(6)
-                for _j, _bc in enumerate(_bcols):
-                    _idx = _rs + _j
-                    if _idx < len(watchlist):
-                        with _bc:
-                            if st.button(watchlist[_idx], key=f"wl_{watchlist[_idx]}"):
-                                go_to_analysis(watchlist[_idx])
-                                st.rerun()
+            # Compact clickable symbol pills
+            selected = st.pills("🔍 Quick analyze", watchlist,
+                                default=None, key="wl_pill")
+            if selected:
+                del st.session_state["wl_pill"]
+                go_to_analysis(selected)
+                st.rerun()
         else:
             st.info("Watchlist is empty. Add some symbols!")
