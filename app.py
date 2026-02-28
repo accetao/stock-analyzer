@@ -1016,7 +1016,7 @@ with st.sidebar:
 
     nav_options = ["🏠 Dashboard", "🔍 Stock Analysis", "🌡️ Market Pulse",
                    "📊 Screener", "🏆 Rankings", "⚖️ Compare",
-                   "⏳ What-If Machine", "� Portfolio Tracker",
+                   "⏳ What-If Machine", "💼 Portfolio Tracker",
                    "📋 Watchlist", "🧓 Buffett Portfolio"]
     if "nav_to" in st.session_state:
         st.session_state["main_nav"] = st.session_state.pop("nav_to")
