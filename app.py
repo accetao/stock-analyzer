@@ -210,6 +210,12 @@ def fmt_pct(val):
     return f"{val*100:.1f}%"
 
 
+def go_to_analysis(symbol: str):
+    """Navigate to Stock Analysis page for the given symbol."""
+    st.session_state["analyze_symbol"] = symbol.upper().strip()
+    st.session_state["nav_to"] = "🔍 Stock Analysis"
+
+
 @st.cache_data(ttl=900, show_spinner=False)
 def fetch_history(symbol, period, interval="1d"):
     return data_fetcher.get_history(symbol, period=period, interval=interval)
@@ -368,10 +374,12 @@ with st.sidebar:
     st.markdown('<div class="sub-header">Real-time analysis • Yahoo Finance</div>', unsafe_allow_html=True)
     st.divider()
 
+    nav_options = ["🏠 Dashboard", "🔍 Stock Analysis", "📊 Screener",
+                   "🏆 Rankings", "⚖️ Compare", "📋 Watchlist"]
+    if "nav_to" in st.session_state:
+        st.session_state["main_nav"] = st.session_state.pop("nav_to")
     page = st.radio(
-        "Navigation",
-        ["🏠 Dashboard", "🔍 Stock Analysis", "📊 Screener", "🏆 Rankings",
-         "⚖️ Compare", "📋 Watchlist"],
+        "Navigation", nav_options, key="main_nav",
         label_visibility="collapsed",
     )
 
@@ -403,8 +411,7 @@ if page == "🏠 Dashboard":
         quick_go = st.button("Analyze →", use_container_width=True)
 
     if quick_go and quick_sym:
-        st.session_state["analyze_symbol"] = quick_sym.upper().strip()
-        st.session_state["page_override"] = "🔍 Stock Analysis"
+        go_to_analysis(quick_sym)
         st.rerun()
 
     st.divider()
@@ -455,6 +462,10 @@ if page == "🏠 Dashboard":
                         <div style="font-size:1.15rem;font-weight:600">${d['price']:.2f}</div>
                         <div style="color:{change_color};font-weight:600">{arrow} {change_str}</div>
                     </div>""", unsafe_allow_html=True)
+                    if st.button(f"🔍 Analyze", key=f"dash_{d['symbol']}",
+                                 use_container_width=True):
+                        go_to_analysis(d["symbol"])
+                        st.rerun()
     else:
         st.info("No watchlist found. Go to 📋 Watchlist to set one up.")
 
@@ -467,17 +478,22 @@ elif page == "🔍 Stock Analysis":
     st.markdown("## 🔍 Stock Analysis")
 
     # Input bar
+    auto_run = "analyze_symbol" in st.session_state
+    if auto_run:
+        st.session_state["sym_input"] = st.session_state.pop("analyze_symbol")
+    elif "sym_input" not in st.session_state:
+        st.session_state["sym_input"] = "AAPL"
+
     col1, col2, col3 = st.columns([2, 1, 1])
-    default_sym = st.session_state.pop("analyze_symbol", "AAPL")
     with col1:
-        symbol = st.text_input("Symbol", value=default_sym).upper().strip()
+        symbol = st.text_input("Symbol", key="sym_input").upper().strip()
     with col2:
         period = st.selectbox("Period", ["1mo", "3mo", "6mo", "1y", "2y", "5y"], index=3)
     with col3:
         st.markdown("<br>", unsafe_allow_html=True)
         analyze_btn = st.button("🔍 Analyze", type="primary", use_container_width=True)
 
-    if symbol and (analyze_btn or default_sym != "AAPL"):
+    if symbol and (analyze_btn or auto_run):
         with st.spinner(f"Analyzing {symbol}..."):
             df = fetch_history(symbol, period)
             info = fetch_info(symbol)
@@ -738,6 +754,19 @@ elif page == "📊 Screener":
                         "Reasons": ", ".join(r.get("reasons", [])),
                     })
                 st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+
+                # Quick-analyze links
+                st.markdown("##### 🔍 Click to analyze:")
+                _syms = [r["symbol"] for r in results]
+                for _rs in range(0, len(_syms), 6):
+                    _bcols = st.columns(6)
+                    for _j, _bc in enumerate(_bcols):
+                        _idx = _rs + _j
+                        if _idx < len(_syms):
+                            with _bc:
+                                if st.button(_syms[_idx], key=f"scr_{_syms[_idx]}"):
+                                    go_to_analysis(_syms[_idx])
+                                    st.rerun()
             else:
                 st.warning("No stocks matched. Try a different strategy.")
         else:
@@ -821,6 +850,19 @@ elif page == "🏆 Rankings":
                         "Direction": r.get("trend_direction", ""),
                     })
                 st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+
+                # Quick-analyze links
+                st.markdown("##### 🔍 Click to analyze:")
+                _rsyms = [r["symbol"] for r in ranked]
+                for _rs in range(0, len(_rsyms), 6):
+                    _bcols = st.columns(6)
+                    for _j, _bc in enumerate(_bcols):
+                        _idx = _rs + _j
+                        if _idx < len(_rsyms):
+                            with _bc:
+                                if st.button(_rsyms[_idx], key=f"rank_{_rsyms[_idx]}"):
+                                    go_to_analysis(_rsyms[_idx])
+                                    st.rerun()
             else:
                 st.warning("No stocks could be scored.")
         else:
@@ -876,6 +918,9 @@ elif page == "⚖️ Compare":
                             st.markdown(f"- Fund: {result.get('fundamental_score', 'N/A')}")
                             st.markdown(f"- Trend: {result.get('trend_score', 'N/A')}")
                             st.markdown(f"- Mom: {result.get('momentum_score', 'N/A')}")
+                            if st.button(f"🔍 Full Analysis", key=f"cmp_{sym}"):
+                                go_to_analysis(sym)
+                                st.rerun()
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -933,9 +978,17 @@ elif page == "📋 Watchlist":
                     wl_data.append({"Symbol": sym, "Name": "Error", "Price": "N/A",
                                     "Change": "N/A", "Sector": "", "Market Cap": "N/A"})
             st.dataframe(pd.DataFrame(wl_data), use_container_width=True, hide_index=True)
+
+            # Quick-analyze links
+            st.markdown("##### 🔍 Click to analyze:")
+            for _rs in range(0, len(watchlist), 6):
+                _bcols = st.columns(6)
+                for _j, _bc in enumerate(_bcols):
+                    _idx = _rs + _j
+                    if _idx < len(watchlist):
+                        with _bc:
+                            if st.button(watchlist[_idx], key=f"wl_{watchlist[_idx]}"):
+                                go_to_analysis(watchlist[_idx])
+                                st.rerun()
         else:
             st.info("Watchlist is empty. Add some symbols!")
-
-# ─── Handle page override from dashboard quick lookup ────────────────────────
-if st.session_state.get("page_override"):
-    del st.session_state["page_override"]
