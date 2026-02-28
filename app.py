@@ -1094,6 +1094,7 @@ elif page == "🔍 Stock Analysis":
     auto_run = "analyze_symbol" in st.session_state
     if auto_run:
         st.session_state["sym_input"] = st.session_state.pop("analyze_symbol")
+        st.session_state["_analysis_active"] = True  # keep analysis open across reruns
     elif "sym_input" not in st.session_state:
         st.session_state["sym_input"] = "AAPL"
 
@@ -1106,7 +1107,12 @@ elif page == "🔍 Stock Analysis":
         st.markdown("<br>", unsafe_allow_html=True)
         analyze_btn = st.button("🔍 Analyze", type="primary", use_container_width=True)
 
-    if symbol and (analyze_btn or auto_run):
+    if analyze_btn:
+        st.session_state["_analysis_active"] = True
+
+    _should_analyze = symbol and (analyze_btn or auto_run or st.session_state.get("_analysis_active"))
+
+    if _should_analyze:
         with st.spinner(f"Analyzing {symbol}..."):
             df = fetch_history(symbol, period)
             info = fetch_info(symbol)
