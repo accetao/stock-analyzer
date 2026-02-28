@@ -265,6 +265,14 @@ def csv_download(df, filename, label="📥 Download CSV"):
 
 # ─── AI / LLM Engine ────────────────────────────────────────────────────────
 
+def _normalize_base_url(url: str) -> str:
+    """Ensure the base URL ends with /v1 (required by OpenAI-compatible APIs)."""
+    url = url.rstrip("/")
+    if not url.endswith("/v1"):
+        url += "/v1"
+    return url
+
+
 def get_ai_client():
     """Return an OpenAI-compatible client if API key is configured."""
     if not HAS_OPENAI:
@@ -274,8 +282,17 @@ def get_ai_client():
         api_key = os.environ.get("OPENAI_API_KEY", "").strip()
     if not api_key:
         return None
-    base_url = st.session_state.get("openai_base_url", "").strip() or None
-    return OpenAI(api_key=api_key, base_url=base_url)
+    base_url = st.session_state.get("openai_base_url", "").strip()
+    kwargs = {"api_key": api_key}
+    if base_url:
+        kwargs["base_url"] = _normalize_base_url(base_url)
+    # Generous timeout for local models (Ollama can be slow on first call)
+    try:
+        import httpx
+        kwargs["timeout"] = httpx.Timeout(120.0, connect=15.0)
+    except ImportError:
+        pass
+    return OpenAI(**kwargs)
 
 
 def ai_available() -> bool:
@@ -761,6 +778,24 @@ with st.sidebar:
     st.divider()
     with st.expander("🤖 AI Settings", expanded=False):
         st.caption("Connect any OpenAI-compatible API for live AI insights")
+
+        # Auto-detect Ollama running locally
+        ollama_running = False
+        try:
+            import urllib.request
+            req = urllib.request.urlopen("http://localhost:11434/api/tags", timeout=2)
+            ollama_running = req.status == 200
+        except Exception:
+            pass
+
+        if ollama_running:
+            st.success("🌟 Ollama detected running locally!")
+            if st.button("⚡ Auto-configure Ollama", use_container_width=True):
+                st.session_state["openai_api_key"] = "ollama"
+                st.session_state["openai_base_url"] = "http://localhost:11434/v1"
+                st.session_state["openai_model"] = "llama3.2"
+                st.rerun()
+
         st.text_input(
             "API Key", type="password", key="openai_api_key",
             placeholder="sk-... or any compatible key",
@@ -768,15 +803,34 @@ with st.sidebar:
         )
         st.text_input(
             "Base URL (optional)", key="openai_base_url",
-            placeholder="https://api.openai.com/v1",
-            help="Leave empty for OpenAI. Set for Azure, Ollama, etc.",
+            placeholder="http://localhost:11434  or  https://api.openai.com/v1",
+            help="Leave empty for OpenAI. For Ollama: http://localhost:11434",
         )
+        # Model input — use default only if not yet set
+        if "openai_model" not in st.session_state:
+            st.session_state["openai_model"] = "gpt-4o-mini"
         st.text_input(
-            "Model", key="openai_model", value="gpt-4o-mini",
-            help="e.g. gpt-4o, gpt-4o-mini, gpt-3.5-turbo, or local model name",
+            "Model", key="openai_model",
+            help="e.g. gpt-4o-mini, llama3.2, mistral, etc.",
         )
+
         if ai_available():
             st.success("✅ AI engine connected")
+            # Test connection button
+            if st.button("📡 Test Connection", use_container_width=True):
+                with st.spinner("Testing AI connection..."):
+                    test_result = call_llm(
+                        "You are a helpful assistant.",
+                        "Respond with exactly: CONNECTION OK",
+                        temperature=0.0, max_tokens=20,
+                    )
+                if test_result and "⚠️" not in test_result:
+                    st.success(f"✅ Working! Response: {test_result[:50]}")
+                else:
+                    st.error(f"❌ {test_result}")
+                    base = st.session_state.get('openai_base_url', '')
+                    if base and '/v1' not in base:
+                        st.info("💡 Tip: The URL will be auto-corrected to include /v1")
         elif HAS_OPENAI:
             st.info("Enter an API key to enable AI insights")
         else:
