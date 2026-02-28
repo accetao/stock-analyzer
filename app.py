@@ -413,7 +413,8 @@ with st.sidebar:
     st.divider()
 
     nav_options = ["🏠 Dashboard", "🔍 Stock Analysis", "📊 Screener",
-                   "🏆 Rankings", "⚖️ Compare", "📋 Watchlist"]
+                   "🏆 Rankings", "⚖️ Compare", "📋 Watchlist",
+                   "🧓 Buffett Portfolio"]
     if "nav_to" in st.session_state:
         st.session_state["main_nav"] = st.session_state.pop("nav_to")
     page = st.radio(
@@ -1180,3 +1181,176 @@ elif page == "📋 Watchlist":
                 st.rerun()
         else:
             st.info("Watchlist is empty. Add some symbols!")
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+#  PAGE: Buffett Portfolio
+# ═════════════════════════════════════════════════════════════════════════════
+
+elif page == "🧓 Buffett Portfolio":
+    st.markdown("## 🧓 Warren Buffett's Portfolio")
+    st.markdown(
+        "Berkshire Hathaway's equity holdings from the latest SEC 13-F filing. "
+        "These are the stocks that Warren Buffett and his team have chosen to hold."
+    )
+
+    # ── Berkshire Hathaway 13F holdings ──
+    # Source: SEC 13-F filing by Berkshire Hathaway Inc (CIK 0001067983)
+    # Data reflects the most recent publicly available quarterly filing.
+    BUFFETT_HOLDINGS = [
+        {"symbol": "AAPL",  "name": "Apple Inc",                "shares": 300_000_000, "pct_portfolio": 28.1, "sector": "Technology"},
+        {"symbol": "AXP",   "name": "American Express",         "shares": 151_610_700, "pct_portfolio": 16.2, "sector": "Financials"},
+        {"symbol": "BAC",   "name": "Bank of America",          "shares": 680_233_587, "pct_portfolio": 11.2, "sector": "Financials"},
+        {"symbol": "KO",    "name": "Coca-Cola",                "shares": 400_000_000, "pct_portfolio": 10.4, "sector": "Consumer Staples"},
+        {"symbol": "CVX",   "name": "Chevron",                  "shares": 118_610_534, "pct_portfolio":  6.5, "sector": "Energy"},
+        {"symbol": "OXY",   "name": "Occidental Petroleum",     "shares": 264_224_664, "pct_portfolio":  4.9, "sector": "Energy"},
+        {"symbol": "MCO",   "name": "Moody's Corp",             "shares":  24_669_778, "pct_portfolio":  4.5, "sector": "Financials"},
+        {"symbol": "KHC",   "name": "Kraft Heinz",              "shares": 325_634_818, "pct_portfolio":  3.7, "sector": "Consumer Staples"},
+        {"symbol": "CB",    "name": "Chubb Ltd",                "shares":  25_915_831, "pct_portfolio":  2.7, "sector": "Financials"},
+        {"symbol": "DVA",   "name": "DaVita Inc",               "shares":  36_095_570, "pct_portfolio":  2.1, "sector": "Healthcare"},
+        {"symbol": "KR",    "name": "Kroger",                   "shares":  50_000_000, "pct_portfolio":  1.1, "sector": "Consumer Staples"},
+        {"symbol": "VRSN",  "name": "VeriSign",                 "shares":  12_815_613, "pct_portfolio":  0.9, "sector": "Technology"},
+        {"symbol": "V",     "name": "Visa Inc",                 "shares":   8_297_460, "pct_portfolio":  0.9, "sector": "Financials"},
+        {"symbol": "MA",    "name": "Mastercard",               "shares":   3_986_648, "pct_portfolio":  0.7, "sector": "Financials"},
+        {"symbol": "AMZN",  "name": "Amazon.com",               "shares":  10_000_000, "pct_portfolio":  0.7, "sector": "Consumer Discretionary"},
+        {"symbol": "NU",    "name": "Nu Holdings",              "shares":  86_389_383, "pct_portfolio":  0.4, "sector": "Financials"},
+        {"symbol": "COF",   "name": "Capital One Financial",    "shares":   2_639_022, "pct_portfolio":  0.2, "sector": "Financials"},
+        {"symbol": "SIRI",  "name": "Sirius XM Holdings",       "shares":  34_291_627, "pct_portfolio":  0.1, "sector": "Communication"},
+        {"symbol": "ALLY",  "name": "Ally Financial",            "shares":   9_000_000, "pct_portfolio":  0.1, "sector": "Financials"},
+        {"symbol": "LSXMK", "name": "Liberty SiriusXM Grp C",   "shares":  43_208_291, "pct_portfolio":  0.1, "sector": "Communication"},
+    ]
+
+    # ── Buffett's investment principles ──
+    with st.expander("🎓 Buffett's Investment Principles", expanded=False):
+        st.markdown("""
+        Warren Buffett follows a **value investing** philosophy. Key principles:
+
+        1. **Buy wonderful companies at fair prices** — not fair companies at wonderful prices
+        2. **Economic moat** — invest in companies with durable competitive advantages
+        3. **Long-term holding** — "Our favorite holding period is forever"
+        4. **Margin of safety** — buy when the price is well below intrinsic value
+        5. **Understand the business** — invest only in what you understand
+        6. **Strong management** — look for honest, competent leaders
+        7. **Consistent earnings** — prefer predictable, growing earnings power
+        8. **Low debt** — companies that don't need leverage to generate returns
+        """)
+
+    st.divider()
+
+    # ── Sector allocation chart ──
+    sectors = {}
+    for h in BUFFETT_HOLDINGS:
+        sectors[h["sector"]] = sectors.get(h["sector"], 0) + h["pct_portfolio"]
+
+    ch1, ch2 = st.columns([1, 2])
+    with ch1:
+        st.markdown("#### Sector Allocation")
+        fig_pie = go.Figure(go.Pie(
+            labels=list(sectors.keys()),
+            values=list(sectors.values()),
+            hole=0.45,
+            marker=dict(colors=[
+                "#1e88e5", "#43a047", "#fb8c00", "#e53935",
+                "#8e24aa", "#00acc1", "#6d4c41",
+            ]),
+            textinfo="label+percent",
+            textposition="outside",
+        ))
+        fig_pie.update_layout(
+            height=350, margin=dict(l=20, r=20, t=30, b=20),
+            showlegend=False,
+        )
+        st.plotly_chart(fig_pie, use_container_width=True)
+
+    with ch2:
+        st.markdown("#### Top 10 Holdings by Portfolio Weight")
+        top10 = BUFFETT_HOLDINGS[:10]
+        fig_bar = go.Figure(go.Bar(
+            y=[h["symbol"] for h in top10][::-1],
+            x=[h["pct_portfolio"] for h in top10][::-1],
+            orientation="h",
+            marker_color=["#1e88e5"] * 10,
+            text=[f"{h['pct_portfolio']:.1f}%" for h in top10][::-1],
+            textposition="outside",
+        ))
+        fig_bar.update_layout(
+            height=350, template="plotly_white",
+            xaxis=dict(title="% of Portfolio", range=[0, max(h['pct_portfolio'] for h in top10) * 1.25]),
+            margin=dict(l=60, r=60, t=30, b=40),
+        )
+        st.plotly_chart(fig_bar, use_container_width=True)
+
+    st.divider()
+
+    # ── Live holdings table ──
+    st.markdown("#### Full Holdings — Live Prices")
+    st.caption("Click any stock below to run a full analysis")
+
+    progress = st.progress(0, text="Fetching live data...")
+    table_rows = []
+    for i, h in enumerate(BUFFETT_HOLDINGS):
+        progress.progress((i + 1) / len(BUFFETT_HOLDINGS),
+                          text=f"Loading {h['symbol']}...")
+        try:
+            info = fetch_info(h["symbol"])
+            live_price = info.get("currentPrice") or info.get("regularMarketPrice")
+            prev_close = info.get("previousClose")
+            day_change = ((live_price - prev_close) / prev_close * 100
+                          if live_price and prev_close else None)
+            mkt_cap = info.get("marketCap")
+            pe = info.get("trailingPE")
+            div_yield = info.get("dividendYield")
+            value_held = live_price * h["shares"] if live_price else None
+        except Exception:
+            live_price = day_change = mkt_cap = pe = div_yield = value_held = None
+
+        row = {
+            "#": i + 1,
+            "Symbol": h["symbol"],
+            "Company": h["name"],
+            "% Portfolio": f"{h['pct_portfolio']:.1f}%",
+            "Shares": f"{h['shares']:,}",
+            "Price": f"${live_price:.2f}" if live_price else "N/A",
+            "Day Chg": f"{day_change:+.2f}%" if day_change is not None else "N/A",
+            "Est. Value": fmt_number(value_held, "$") if value_held else "N/A",
+            "P/E": f"{pe:.1f}" if pe else "N/A",
+            "Div Yield": f"{div_yield * 100:.2f}%" if div_yield else "N/A",
+            "Sector": h["sector"],
+        }
+        table_rows.append(row)
+    progress.empty()
+
+    st.dataframe(pd.DataFrame(table_rows), use_container_width=True, hide_index=True)
+
+    # Quick-analyze pills
+    buff_syms = [h["symbol"] for h in BUFFETT_HOLDINGS]
+    selected = st.pills("🔍 Analyze a Buffett stock", buff_syms,
+                        default=None, key="buff_pill")
+    if selected:
+        del st.session_state["buff_pill"]
+        go_to_analysis(selected)
+        st.rerun()
+
+    # ── Why these stocks? ──
+    st.divider()
+    with st.expander("💡 Why does Buffett hold these stocks?", expanded=False):
+        st.markdown("""
+        | Stock | Buffett's Rationale |
+        |-------|--------------------|
+        | **AAPL** | Massive ecosystem, unmatched brand loyalty, huge buybacks & cash flow |
+        | **AXP** | Dominant payment network with affluent customer base & pricing power |
+        | **BAC** | Largest U.S. bank by deposits, benefits from higher interest rates |
+        | **KO** | Ultimate consumer brand — sold in 200+ countries, 60+ years of dividend growth |
+        | **CVX** | Top-tier energy major with disciplined capital allocation |
+        | **OXY** | Low-cost U.S. oil producer; Buffett likes the CEO and balance sheet |
+        | **MCO** | Duopoly in credit ratings — essential service with recurring revenue |
+        | **KHC** | Iconic food brands; Berkshire helped create the company |
+        | **CB** | World's largest publicly traded P&C insurer — strong underwriting |
+        | **DVA** | Dominant in kidney dialysis — aging population tailwind |
+        """)
+
+    st.caption(
+        "⚠️ Data based on Berkshire Hathaway's SEC 13-F filings. "
+        "Holdings are reported with a ~45-day delay and may not reflect current positions. "
+        "This is not investment advice."
+    )
