@@ -9,6 +9,7 @@ import sys, os
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import streamlit as st
+import streamlit.components.v1
 import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
@@ -287,26 +288,25 @@ def _sync_url_to_state():
 
 
 def _sync_state_to_url(page_label: str, symbol: str = ""):
-    """Atomically update the URL bar to reflect the current page & symbol.
+    """Update the browser URL bar via JavaScript replaceState.
 
-    Uses from_dict for a single browser history entry (no intermediate
-    states like ?page=analysis without &symbol).  Safe from rerun loops
-    because _sync_url_to_state only runs on first load.
+    This is purely cosmetic — it updates what the user sees in the address
+    bar and what gets copied when they share the link, but does NOT:
+    - Trigger a Streamlit rerun
+    - Create extra browser history entries
+    - Interfere with sidebar navigation
     """
     slug = _PAGE_TO_SLUG.get(page_label, "dashboard")
-    want = {"page": slug}
+    qs = f"?page={slug}"
     if symbol:
-        want["symbol"] = symbol.upper()
-    # Build current params dict for comparison
-    qp = st.query_params
-    current = {}
-    for k in ("page", "symbol"):
-        v = qp.get(k, "")
-        if v:
-            current[k] = v
-    # Only write when something actually changed (avoids rerun loops)
-    if current != want:
-        st.query_params.from_dict(want)
+        qs += f"&symbol={symbol.upper()}"
+    # Inject a tiny hidden script that updates the URL bar
+    js = f"""<script>
+    if (window.parent) {{
+        window.parent.history.replaceState(null, "", "{qs}");
+    }}
+    </script>"""
+    st.components.v1.html(js, height=0, width=0)
 
 
 def go_to_analysis(symbol: str):
@@ -1087,10 +1087,8 @@ with st.sidebar:
         label_visibility="collapsed",
     )
 
-    # Update browser URL to match selected page
-    # Skip for Stock Analysis — that page sets its own URL with the symbol
-    if page != "🔍 Stock Analysis":
-        _sync_state_to_url(page)
+    # Update browser URL to match selected page (cosmetic, no rerun)
+    _sync_state_to_url(page)
 
     st.divider()
     st.caption(f"Data cached for {config.CACHE_EXPIRY_MINUTES} min")
