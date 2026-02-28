@@ -265,21 +265,21 @@ _PAGE_TO_SLUG = {
 }
 _SLUG_TO_PAGE = {v: k for k, v in _PAGE_TO_SLUG.items()}
 
-# Inject a JS listener for browser back/forward.  Streamlit does NOT
-# detect popstate events, so pressing back/forward changes the URL but
-# the app doesn't react.  st.html() injects directly into the Streamlit
-# page (no iframe sandbox), so the script runs in the correct window
-# context and can listen for popstate + reload.
-st.html("""
-<script>
-if (!window.__sa_popstate) {
-    window.__sa_popstate = true;
-    window.addEventListener('popstate', function() {
-        window.location.reload();
-    });
-}
-</script>
-""")
+# ── Browser back/forward support ──
+# Streamlit's popstate handler only reacts to page PATH changes, not query
+# param changes.  Since our routing uses ?page=, pressing back/forward
+# changes the URL but Streamlit ignores it.  We embed a tiny iframe with
+# allow-same-origin so its JS can access the parent window and register
+# a popstate listener that forces a full page reload.
+st.markdown(
+    '<iframe srcdoc=\'<script>'
+    'try{var p=parent;if(!p.__saPop){p.__saPop=1;'
+    'p.addEventListener(&quot;popstate&quot;,function(){p.location.reload()})}}'
+    'catch(e){}</script>\' '
+    'sandbox="allow-scripts allow-same-origin" '
+    'style="display:none" height="0" width="0"></iframe>',
+    unsafe_allow_html=True,
+)
 
 
 def _read_url_params():
