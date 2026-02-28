@@ -795,24 +795,45 @@ with st.sidebar:
 
     # ── AI Configuration ──
     st.divider()
+
+    # Auto-detect Ollama BEFORE widgets render so defaults are pre-filled
+    _ollama_running = False
+    try:
+        import urllib.request as _ul
+        _ollama_req = _ul.urlopen("http://127.0.0.1:11434/api/tags", timeout=2)
+        _ollama_running = _ollama_req.status == 200
+        # Fetch available model names
+        import json as _json
+        _ollama_models = [m["name"] for m in _json.loads(_ollama_req.read()).get("models", [])]
+    except Exception:
+        _ollama_models = []
+
+    # Auto-configure Ollama on first load (no key set yet)
+    if _ollama_running and not st.session_state.get("openai_api_key"):
+        # Pick best available model
+        _pick = "llama3.2"
+        for _m in _ollama_models:
+            if _m.startswith("llama3.2"):
+                _pick = _m.split(":")[0]  # "llama3.2:latest" -> "llama3.2"
+                break
+        st.session_state["openai_api_key"] = "ollama"
+        st.session_state["openai_base_url"] = "http://127.0.0.1:11434"
+        st.session_state["openai_model"] = _pick
+
     with st.expander("🤖 AI Settings", expanded=False):
         st.caption("Connect any OpenAI-compatible API for live AI insights")
 
-        # Auto-detect Ollama running locally
-        ollama_running = False
-        try:
-            import urllib.request
-            req = urllib.request.urlopen("http://127.0.0.1:11434/api/tags", timeout=2)
-            ollama_running = req.status == 200
-        except Exception:
-            pass
-
-        if ollama_running:
-            st.success("🌟 Ollama detected running locally!")
-            if st.button("⚡ Auto-configure Ollama", use_container_width=True):
+        if _ollama_running:
+            st.success(f"🌟 Ollama detected — {len(_ollama_models)} model(s) available")
+            if st.button("⚡ Re-configure Ollama", use_container_width=True):
+                _pick = "llama3.2"
+                for _m in _ollama_models:
+                    if _m.startswith("llama3.2"):
+                        _pick = _m.split(":")[0]
+                        break
                 st.session_state["openai_api_key"] = "ollama"
                 st.session_state["openai_base_url"] = "http://127.0.0.1:11434"
-                st.session_state["openai_model"] = "llama3.2"
+                st.session_state["openai_model"] = _pick
                 st.rerun()
 
         st.text_input(
@@ -822,8 +843,8 @@ with st.sidebar:
         )
         st.text_input(
             "Base URL (optional)", key="openai_base_url",
-            placeholder="http://localhost:11434  or  https://api.openai.com/v1",
-            help="Leave empty for OpenAI. For Ollama: http://localhost:11434",
+            placeholder="http://127.0.0.1:11434  or  https://api.openai.com/v1",
+            help="Leave empty for OpenAI. For Ollama: http://127.0.0.1:11434",
         )
         # Model input — use default only if not yet set
         if "openai_model" not in st.session_state:
