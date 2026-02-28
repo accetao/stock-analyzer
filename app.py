@@ -299,9 +299,36 @@ def _load_stock_symbols() -> dict:
             name = r.get("name", "").strip()
             if not sym or not name:
                 continue
+            # --- Filter out non-common-stock instruments ---
+            nl = name.lower()
+            # Preferred stocks (^ in ticker like MS^F)
+            if "^" in sym:
+                continue
+            # Warrants, rights, units by suffix
             if any(sym.endswith(s) for s in ("W", "WS", "R", "U")) and len(sym) > 3:
                 if "Warrant" in name or "Unit" in name or "Right" in name:
                     continue
+            # Preferred / depositary preferred by name
+            if "preferred stock" in nl:
+                continue
+            if "depositary shares" in nl and ("1/1000" in nl or "preferred" in nl or "interest in" in nl):
+                continue
+            # Warrants / rights by name
+            if "warrant" in nl:
+                continue
+            if "subscription right" in nl or "contingent value right" in nl:
+                continue
+            # Units
+            if nl.endswith(" units"):
+                continue
+            # Blank-check / SPAC shells
+            if "blank check" in nl:
+                continue
+            if "acquisition corp" in nl or "acquisition inc" in nl:
+                continue
+            if "merger corp" in nl or "merger sub" in nl:
+                continue
+            # --- Clean company name ---
             name = _re.sub(r"\s*Common Stock$", "", name)
             name = _re.sub(r"\s*Common Shares$", "", name)
             name = _re.sub(r"\s*Ordinary Shares$", "", name)
