@@ -267,45 +267,46 @@ _SLUG_TO_PAGE = {v: k for k, v in _PAGE_TO_SLUG.items()}
 
 
 def _sync_url_to_state():
-    """Read ?page= and ?symbol= from the URL and sync session state.
+    """On page load, read ?page= and ?symbol= from the URL and set session state.
 
-    Runs on every rerun so browser back/forward is detected:
-    if the URL slug differs from the current session page, the URL wins.
+    Only acts when session state hasn't been set yet (first load or direct link).
+    After the sidebar radio is rendered, the radio widget owns main_nav.
     """
-    # Programmatic nav (go_to_analysis) takes priority over URL
+    # Programmatic nav (go_to_analysis) takes priority
     if "nav_to" in st.session_state:
+        return
+    # Only seed state on first load (before the radio widget has set main_nav)
+    if "main_nav" in st.session_state:
         return
     qp = st.query_params
     slug = qp.get("page", "")
     sym = qp.get("symbol", "")
-    if not slug or slug not in _SLUG_TO_PAGE:
-        return
-    url_page = _SLUG_TO_PAGE[slug]
-    current_page = st.session_state.get("main_nav", "")
-    # If URL page differs from current page -> browser back/forward or direct link
-    if url_page != current_page:
-        st.session_state["main_nav"] = url_page
-        # Clear analysis state when navigating away from analysis
-        if slug != "analysis":
-            st.session_state.pop("_analysis_active", None)
-        # Seed symbol if navigating TO analysis via URL
+    if slug and slug in _SLUG_TO_PAGE:
+        st.session_state["main_nav"] = _SLUG_TO_PAGE[slug]
         if slug == "analysis" and sym:
             st.session_state["analyze_symbol"] = sym.upper()
             st.session_state["_analysis_active"] = True
 
 
 def _sync_state_to_url(page_label: str, symbol: str = ""):
-    """Replace all query params to reflect the current page & symbol.
+    """Update the browser URL only when it actually differs from current params.
 
-    Uses from_dict to fully replace (not merge) so stale params like
-    &symbol=AAPL are removed when navigating away from the analysis page.
+    Avoids triggering unnecessary Streamlit reruns.
     """
     slug = _PAGE_TO_SLUG.get(page_label, "dashboard")
-    params = {"page": slug}
+    want = {"page": slug}
     if symbol:
-        params["symbol"] = symbol.upper()
-    # from_dict replaces ALL params (vs update which merges)
-    st.query_params.from_dict(params)
+        want["symbol"] = symbol.upper()
+    # Read current URL params
+    qp = st.query_params
+    current = {}
+    for k in ("page", "symbol"):
+        v = qp.get(k, "")
+        if v:
+            current[k] = v
+    # Only write if something changed
+    if current != want:
+        st.query_params.from_dict(want)
 
 
 def go_to_analysis(symbol: str):
