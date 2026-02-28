@@ -9,7 +9,6 @@ import sys, os
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import streamlit as st
-import streamlit.components.v1
 import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
@@ -267,14 +266,16 @@ _PAGE_TO_SLUG = {
 _SLUG_TO_PAGE = {v: k for k, v in _PAGE_TO_SLUG.items()}
 
 
-def _sync_url_to_state():
-    """On FIRST load only, read ?page= and ?symbol= from the URL.
+def _read_url_params():
+    """Read ?page= and ?symbol= from the browser URL on first load.
 
-    After the first load, the sidebar radio widget owns navigation.
-    This function never triggers reruns.
+    Only seeds session state when main_nav hasn't been set yet (first
+    page load or direct link visit).  Never triggers reruns.
     """
+    # Programmatic navigation takes priority
     if "nav_to" in st.session_state:
         return
+    # Only act on first load (before sidebar radio creates main_nav)
     if "main_nav" in st.session_state:
         return
     qp = st.query_params
@@ -287,26 +288,29 @@ def _sync_url_to_state():
             st.session_state["_analysis_active"] = True
 
 
-def _sync_state_to_url(page_label: str, symbol: str = ""):
-    """Update the browser URL bar via JavaScript replaceState.
+def _write_url_params(page_label: str, symbol: str = ""):
+    """Write the current page to the browser URL bar (once per render).
 
-    This is purely cosmetic — it updates what the user sees in the address
-    bar and what gets copied when they share the link, but does NOT:
-    - Trigger a Streamlit rerun
-    - Create extra browser history entries
-    - Interfere with sidebar navigation
+    Uses from_dict which triggers a Streamlit rerun, but the guard
+    (current == want) ensures it only fires when the URL is stale,
+    so there is no infinite loop.
+
+    Call this ONCE at the very end of the script, never in the sidebar.
     """
     slug = _PAGE_TO_SLUG.get(page_label, "dashboard")
-    qs = f"?page={slug}"
+    want = {"page": slug}
     if symbol:
-        qs += f"&symbol={symbol.upper()}"
-    # Inject a tiny hidden script that updates the URL bar
-    js = f"""<script>
-    if (window.parent) {{
-        window.parent.history.replaceState(null, "", "{qs}");
-    }}
-    </script>"""
-    st.components.v1.html(js, height=0, width=0)
+        want["symbol"] = symbol.upper()
+    # Read what the URL currently has
+    qp = st.query_params
+    current = {}
+    for k in ("page", "symbol"):
+        v = qp.get(k, "")
+        if v:
+            current[k] = v
+    # Only write when something actually changed
+    if current != want:
+        st.query_params.from_dict(want)
 
 
 def go_to_analysis(symbol: str):
@@ -1077,8 +1081,8 @@ with st.sidebar:
                    "📊 Screener", "🏆 Rankings", "⚖️ Compare",
                    "⏳ What-If Machine", "💼 Portfolio Tracker",
                    "📋 Watchlist", "🧓 Buffett Portfolio"]
-    # URL routing: seed state from ?page= on first load
-    _sync_url_to_state()
+    # URL routing: read ?page= from URL on first load / direct link
+    _read_url_params()
 
     if "nav_to" in st.session_state:
         st.session_state["main_nav"] = st.session_state.pop("nav_to")
@@ -1086,9 +1090,6 @@ with st.sidebar:
         "Navigation", nav_options, key="main_nav",
         label_visibility="collapsed",
     )
-
-    # Update browser URL to match selected page (cosmetic, no rerun)
-    _sync_state_to_url(page)
 
     st.divider()
     st.caption(f"Data cached for {config.CACHE_EXPIRY_MINUTES} min")
@@ -1356,10 +1357,6 @@ elif page == "🔍 Stock Analysis":
         st.session_state["_analysis_active"] = True
 
     _should_analyze = symbol and (analyze_btn or auto_run or st.session_state.get("_analysis_active"))
-
-    # Keep URL bar in sync with the analyzed symbol
-    if symbol and st.session_state.get("_analysis_active"):
-        _sync_state_to_url(page, symbol)
 
     if _should_analyze:
         with st.spinner(f"Analyzing {symbol}..."):
@@ -2966,3 +2963,12 @@ elif page == "🧓 Buffett Portfolio":
         "Holdings are reported with a ~45-day delay and may not reflect current positions. "
         "This is not investment advice."
     )
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+#  URL SYNC — write the current page to the browser URL bar (runs last)
+# ═════════════════════════════════════════════════════════════════════════════
+_url_symbol = ""
+if page == "🔍 Stock Analysis" and st.session_state.get("_analysis_active"):
+    _url_symbol = st.session_state.get("_sym_main_result", "")
+_write_url_params(page, _url_symbol)
