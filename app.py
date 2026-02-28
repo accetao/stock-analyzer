@@ -267,14 +267,10 @@ _SLUG_TO_PAGE = {v: k for k, v in _PAGE_TO_SLUG.items()}
 
 
 def _read_url_params():
-    """Read ?page= and ?symbol= from the browser URL.
-
-    Handles two cases:
-      1. First load (no main_nav yet): seed session state from URL.
-      2. Browser back/forward: URL slug differs from current page
-         → update main_nav so the sidebar follows the URL.
-
-    Skipped when programmatic nav (go_to_analysis) is pending.
+    """Detect browser back/forward by comparing the URL slug to the last
+    slug we wrote.  If they differ, the URL changed externally and we
+    update session state to follow it.  If they match, any page change
+    came from the sidebar radio and we leave it alone.
     """
     if "nav_to" in st.session_state:
         return
@@ -282,19 +278,19 @@ def _read_url_params():
     slug = qp.get("page", "")
     if not slug or slug not in _SLUG_TO_PAGE:
         return
-    url_page = _SLUG_TO_PAGE[slug]
-    current_page = st.session_state.get("main_nav", "")
-    # If URL page matches current page, nothing to do
-    if url_page == current_page:
+    # Compare URL to the last slug WE wrote (not to main_nav)
+    last_written = st.session_state.get("_url_last_slug", "")
+    if slug == last_written:
+        # URL hasn't changed externally → sidebar owns navigation
         return
-    # URL differs from session → first load OR browser back/forward
+    # URL differs from what we last wrote → browser back/forward or first load
+    url_page = _SLUG_TO_PAGE[slug]
     st.session_state["main_nav"] = url_page
     sym = qp.get("symbol", "")
     if slug == "analysis" and sym:
         st.session_state["analyze_symbol"] = sym.upper()
         st.session_state["_analysis_active"] = True
     elif slug != "analysis":
-        # Clear analysis state when navigating away
         st.session_state.pop("_analysis_active", None)
 
 
@@ -318,6 +314,9 @@ def _write_url_params(page_label: str, symbol: str = ""):
         v = qp.get(k, "")
         if v:
             current[k] = v
+    # Track what we're about to write so _read_url_params can detect
+    # external changes (browser back/forward) vs our own writes.
+    st.session_state["_url_last_slug"] = slug
     # Only write when something actually changed
     if current != want:
         st.query_params.from_dict(want)
