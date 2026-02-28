@@ -13,7 +13,7 @@ import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
-from datetime import datetime
+from datetime import datetime, timedelta
 
 import config
 from src import (
@@ -269,10 +269,188 @@ def fetch_news(symbol, max_items=10):
     return data_fetcher.get_news(symbol, max_items=max_items)
 
 
-# ─── Interactive Plotly Charts ───────────────────────────────────────────────
+# ─── Market Pulse helpers ────────────────────────────────────────────────────
 
-def create_price_chart(df, symbol, show_sma=True, show_bb=True,
-                       show_volume=True, show_rsi=True, show_macd=True):
+MARKET_INDICES = {
+    "S&P 500": "^GSPC", "NASDAQ": "^IXIC", "Dow Jones": "^DJI",
+    "Russell 2000": "^RUT", "VIX": "^VIX",
+}
+SECTOR_ETFS = {
+    "Technology": "XLK", "Healthcare": "XLV", "Financials": "XLF",
+    "Energy": "XLE", "Consumer Disc.": "XLY", "Consumer Staples": "XLP",
+    "Industrials": "XLI", "Materials": "XLB", "Utilities": "XLU",
+    "Real Estate": "XLRE", "Communications": "XLC",
+}
+
+
+def compute_fear_greed():
+    """Compute a simple Fear & Greed index from market data."""
+    signals = {}
+    score = 50
+    try:
+        # VIX component
+        vix_df = data_fetcher.get_history("^VIX", period="3mo")
+        if not vix_df.empty:
+            vix_now = vix_df["Close"].iloc[-1]
+            vix_avg = vix_df["Close"].mean()
+            if vix_now < 15:
+                signals["VIX"] = ("Extreme Greed", 90)
+            elif vix_now < 20:
+                signals["VIX"] = ("Greed", 70)
+            elif vix_now < 25:
+                signals["VIX"] = ("Neutral", 50)
+            elif vix_now < 30:
+                signals["VIX"] = ("Fear", 30)
+            else:
+                signals["VIX"] = ("Extreme Fear", 10)
+
+        # Market momentum (S&P vs 125-day SMA)
+        sp_df = data_fetcher.get_history("^GSPC", period="1y")
+        if not sp_df.empty and len(sp_df) >= 125:
+            sp_close = sp_df["Close"].iloc[-1]
+            sp_sma = sp_df["Close"].tail(125).mean()
+            pct_above = (sp_close / sp_sma - 1) * 100
+            if pct_above > 5:
+                signals["Momentum"] = ("Extreme Greed", 85)
+            elif pct_above > 2:
+                signals["Momentum"] = ("Greed", 70)
+            elif pct_above > -2:
+                signals["Momentum"] = ("Neutral", 50)
+            elif pct_above > -5:
+                signals["Momentum"] = ("Fear", 30)
+            else:
+                signals["Momentum"] = ("Extreme Fear", 15)
+
+        # Market breadth (% of sample above SMA-50)
+        breadth_syms = ["AAPL", "MSFT", "AMZN", "GOOGL", "META",
+                        "NVDA", "JPM", "JNJ", "V", "PG",
+                        "UNH", "HD", "BAC", "XOM", "PFE",
+                        "KO", "DIS", "CSCO", "NFLX", "INTC"]
+        above_count = 0
+        total = 0
+        for sym in breadth_syms:
+            try:
+                h = data_fetcher.get_history(sym, period="6mo")
+                if not h.empty and len(h) >= 50:
+                    total += 1
+                    if h["Close"].iloc[-1] > h["Close"].tail(50).mean():
+                        above_count += 1
+            except Exception:
+                pass
+        if total > 0:
+            breadth_pct = above_count / total * 100
+            if breadth_pct > 70:
+                signals["Breadth"] = ("Greed", int(breadth_pct))
+            elif breadth_pct > 50:
+                signals["Breadth"] = ("Neutral", int(breadth_pct))
+            else:
+                signals["Breadth"] = ("Fear", int(breadth_pct))
+
+        # Safe-haven demand (Gold performance)
+        gld_df = data_fetcher.get_history("GLD", period="3mo")
+        if not gld_df.empty and len(gld_df) >= 21:
+            gld_ret = (gld_df["Close"].iloc[-1] / gld_df["Close"].iloc[-21] - 1) * 100
+            if gld_ret > 5:
+                signals["Safe Haven"] = ("Extreme Fear", 15)
+            elif gld_ret > 2:
+                signals["Safe Haven"] = ("Fear", 35)
+            elif gld_ret > -1:
+                signals["Safe Haven"] = ("Neutral", 50)
+            else:
+                signals["Safe Haven"] = ("Greed", 75)
+
+        if signals:
+            score = sum(v[1] for v in signals.values()) / len(signals)
+    except Exception:
+        pass
+    return round(score), signals
+
+
+def generate_ai_narrative(symbol, info, result, signals, trend_data, metrics):
+    """Generate a plain-English AI narrative summary for a stock."""
+    name = info.get('shortName', symbol)
+    price = info.get('currentPrice') or info.get('regularMarketPrice', 0)
+    rating = result.get('rating', 'N/A')
+    overall = result.get('overall_score', 0)
+    sector = info.get('sector', 'Unknown')
+    trend = str(trend_data.get('trend', 'SIDEWAYS')).replace('_', ' ').lower()
+    conf = trend_data.get('confidence', 0)
+
+    # Build narrative paragraphs
+    paras = []
+
+    # Opening
+    if overall >= 70:
+        paras.append(f"**{name}** looks like a strong investment opportunity right now. "
+                     f"With an overall score of **{overall:.0f}/100** ({rating}), "
+                     f"multiple indicators are flashing positive signals.")
+    elif overall >= 50:
+        paras.append(f"**{name}** presents a mixed picture for investors. "
+                     f"At **{overall:.0f}/100** ({rating}), there are both "
+                     f"opportunities and risks to consider.")
+    else:
+        paras.append(f"**{name}** is facing headwinds currently. "
+                     f"With a score of **{overall:.0f}/100** ({rating}), "
+                     f"caution may be warranted.")
+
+    # Price action
+    paras.append(f"The stock is trading at **${price:.2f}** in the **{sector}** sector, "
+                 f"currently in a **{trend}** trend with {conf}% confidence.")
+
+    # Technical summary
+    rsi_sig = signals.get('rsi_signal', 'NEUTRAL')
+    macd_sig = signals.get('macd_signal', 'NEUTRAL')
+    tech_parts = []
+    if rsi_sig == 'OVERSOLD':
+        tech_parts.append("the RSI indicates the stock is oversold — a potential buying opportunity")
+    elif rsi_sig == 'OVERBOUGHT':
+        tech_parts.append("the RSI shows overbought conditions — the stock may be due for a pullback")
+    if 'BULLISH' in str(macd_sig):
+        tech_parts.append("MACD confirms bullish momentum")
+    elif 'BEARISH' in str(macd_sig):
+        tech_parts.append("MACD signals bearish momentum")
+    if signals.get('above_sma200'):
+        tech_parts.append("it's trading above its 200-day moving average (a positive long-term sign)")
+    else:
+        tech_parts.append("it's below its 200-day moving average (a cautionary sign)")
+    if tech_parts:
+        paras.append("**Technical outlook:** " + "; ".join(tech_parts) + ".")
+
+    # Fundamental summary
+    if metrics:
+        fund_parts = []
+        pe = metrics.get('trailing_pe')
+        if pe:
+            desc = "attractively valued" if pe < 20 else ("fairly valued" if pe < 30 else "richly valued")
+            fund_parts.append(f"P/E ratio of {pe:.1f} ({desc})")
+        pm = metrics.get('profit_margin')
+        if pm:
+            fund_parts.append(f"profit margin of {pm*100:.1f}%")
+        rg = metrics.get('revenue_growth')
+        if rg:
+            fund_parts.append(f"revenue growing at {rg*100:.1f}%")
+        rec = (metrics.get('recommendation') or '').upper()
+        tp = metrics.get('target_mean_price')
+        if tp and price:
+            upside = (tp - price) / price * 100
+            fund_parts.append(f"analysts target ${tp:.0f} ({upside:+.0f}%)")
+        if fund_parts:
+            paras.append("**Fundamentals:** " + ", ".join(fund_parts) + ".")
+
+    # Bottom-line
+    if overall >= 70:
+        paras.append("**Bottom line:** The data supports a bullish case. "
+                     "Consider this stock for your portfolio, but always "
+                     "diversify and manage risk.")
+    elif overall >= 50:
+        paras.append("**Bottom line:** This is a hold/watch situation. "
+                     "Wait for clearer signals before committing new capital.")
+    else:
+        paras.append("**Bottom line:** The current data suggests caution. "
+                     "If you're holding, consider setting stop-losses. "
+                     "If you're considering buying, wait for improvement in key metrics.")
+
+    return "\n\n".join(paras)
     """Build a multi-panel Plotly chart."""
     if "SMA_20" not in df.columns:
         ta.add_all_indicators(df)
@@ -412,8 +590,9 @@ with st.sidebar:
     st.markdown('<div class="sub-header">Real-time analysis • Yahoo Finance</div>', unsafe_allow_html=True)
     st.divider()
 
-    nav_options = ["🏠 Dashboard", "🔍 Stock Analysis", "📊 Screener",
-                   "🏆 Rankings", "⚖️ Compare", "📋 Watchlist",
+    nav_options = ["🏠 Dashboard", "🔍 Stock Analysis", "🌡️ Market Pulse",
+                   "📊 Screener", "🏆 Rankings", "⚖️ Compare",
+                   "⏳ What-If Machine", "📋 Watchlist",
                    "🧓 Buffett Portfolio"]
     if "nav_to" in st.session_state:
         st.session_state["main_nav"] = st.session_state.pop("nav_to")
@@ -672,9 +851,9 @@ elif page == "🔍 Stock Analysis":
             st.divider()
 
             # ── Tabs ──
-            tab_chart, tab_score, tab_tech, tab_fund, tab_trend, tab_news = st.tabs(
+            tab_chart, tab_score, tab_tech, tab_fund, tab_trend, tab_news, tab_ai = st.tabs(
                 ["📊 Chart", "⭐ Score Details", "🔧 Technical",
-                 "📑 Fundamental", "📈 Trend", "📰 News"]
+                 "📑 Fundamental", "📈 Trend", "📰 News", "🧠 AI Insights"]
             )
 
             # ── TAB: Chart ──
@@ -906,10 +1085,180 @@ elif page == "🔍 Stock Analysis":
                                 if thumb:
                                     st.image(thumb, width=80)
 
+            # ── TAB: AI Insights ──
+            with tab_ai:
+                st.markdown("#### 🧠 AI-Generated Analysis")
+                st.caption("A plain-English summary synthesizing all data points into an actionable narrative")
+
+                narrative = generate_ai_narrative(
+                    symbol, info, result, signals, trend_data, metrics
+                )
+                st.markdown(
+                    f'<div style="background:linear-gradient(135deg,#f8f9fa,#e8f0fe);'
+                    f'border-radius:14px;padding:1.5rem;border:1px solid #ddd;'
+                    f'line-height:1.8;font-size:0.95rem">{narrative}</div>',
+                    unsafe_allow_html=True,
+                )
+
+                st.divider()
+
+                # Decision helper
+                st.markdown("#### ✅ Decision Checklist")
+                checklist_items = [
+                    ("Score above 60 (Buy zone)", (result.get('overall_score', 0) or 0) >= 60),
+                    ("Price in uptrend", "UP" in str(trend_data.get('trend', '')).upper()),
+                    ("RSI not overbought (< 70)", (signals.get('rsi', 50) or 50) < 70),
+                    ("Above 200-day MA", bool(signals.get('above_sma200'))),
+                    ("Positive revenue growth", bool(metrics and (metrics.get('revenue_growth') or 0) > 0)),
+                    ("Analyst upside potential", bool(
+                        metrics and metrics.get('target_mean_price') and price and
+                        metrics['target_mean_price'] > price)),
+                    ("Manageable debt (D/E < 150)", bool(
+                        metrics and metrics.get('debt_to_equity') is not None and
+                        metrics['debt_to_equity'] < 150)),
+                ]
+                passed = sum(1 for _, ok in checklist_items if ok)
+                st.progress(passed / len(checklist_items),
+                            text=f"{passed}/{len(checklist_items)} criteria met")
+                for label, ok in checklist_items:
+                    icon = "✅" if ok else "❌"
+                    st.markdown(f"{icon} {label}")
+
+                # Verdict bar
+                if passed >= 6:
+                    st.success("🚀 **Strong candidate** — Most criteria are met. Worth a deeper look.")
+                elif passed >= 4:
+                    st.info("🔍 **Mixed signals** — Some positives, some concerns. Monitor closely.")
+                else:
+                    st.warning("⚠️ **Proceed with caution** — Multiple red flags detected.")
+
 
 # ═════════════════════════════════════════════════════════════════════════════
-#  PAGE: Screener
+#  PAGE: Market Pulse
 # ═════════════════════════════════════════════════════════════════════════════
+
+elif page == "🌡️ Market Pulse":
+    st.markdown("## 🌡️ Market Pulse")
+    st.markdown("Real-time market sentiment, sector performance, and fear/greed reading")
+
+    with st.spinner("Reading the market's vital signs..."):
+        fg_score, fg_signals = compute_fear_greed()
+
+    # ── Fear & Greed Gauge ──
+    if fg_score <= 25:
+        fg_label, fg_color, fg_emoji = "Extreme Fear", "#b71c1c", "😨"
+    elif fg_score <= 40:
+        fg_label, fg_color, fg_emoji = "Fear", "#f44336", "😟"
+    elif fg_score <= 60:
+        fg_label, fg_color, fg_emoji = "Neutral", "#ff9800", "😐"
+    elif fg_score <= 75:
+        fg_label, fg_color, fg_emoji = "Greed", "#4caf50", "😏"
+    else:
+        fg_label, fg_color, fg_emoji = "Extreme Greed", "#1b5e20", "🤑"
+
+    fg1, fg2 = st.columns([1, 2])
+    with fg1:
+        st.markdown(
+            f'<div style="text-align:center;background:linear-gradient(135deg,#f8f9fa,#e8eaf6);'
+            f'border-radius:16px;padding:1.5rem;border:2px solid {fg_color}">' 
+            f'<div style="font-size:3.5rem;font-weight:900;color:{fg_color}">{fg_score}</div>'
+            f'<div style="font-size:1.4rem;font-weight:700;color:{fg_color}">{fg_emoji} {fg_label}</div>'
+            f'<div style="color:#888;font-size:0.8rem;margin-top:0.3rem">Fear & Greed Index</div>'
+            f'</div>',
+            unsafe_allow_html=True,
+        )
+        st.caption("0 = Extreme Fear · 100 = Extreme Greed")
+
+    with fg2:
+        st.markdown("#### Signal Breakdown")
+        for sig_name, (sig_label, sig_val) in fg_signals.items():
+            scol1, scol2, scol3 = st.columns([2, 3, 1])
+            with scol1:
+                st.markdown(f"**{sig_name}**")
+            with scol2:
+                bar_color = (
+                    "#b71c1c" if sig_val <= 25 else
+                    "#f44336" if sig_val <= 40 else
+                    "#ff9800" if sig_val <= 60 else
+                    "#4caf50" if sig_val <= 75 else "#1b5e20"
+                )
+                st.progress(sig_val / 100)
+            with scol3:
+                st.caption(sig_label)
+
+    st.divider()
+
+    # ── Major Indices ──
+    st.markdown("#### 🌍 Major Indices")
+    idx_cols = st.columns(len(MARKET_INDICES))
+    for i, (name, sym) in enumerate(MARKET_INDICES.items()):
+        with idx_cols[i]:
+            try:
+                idf = fetch_info(sym)
+                p = idf.get("regularMarketPrice", 0)
+                prev = idf.get("regularMarketPreviousClose") or idf.get("previousClose", p)
+                chg = ((p - prev) / prev * 100) if prev else 0
+                st.metric(name, f"{p:,.2f}", f"{chg:+.2f}%")
+            except Exception:
+                st.metric(name, "N/A")
+
+    st.divider()
+
+    # ── Sector Heatmap ──
+    st.markdown("#### 🟩 Sector Performance Heatmap")
+    st.caption("Click any sector to analyze the ETF")
+    sector_data = []
+    for sec_name, etf in SECTOR_ETFS.items():
+        try:
+            sinfo = fetch_info(etf)
+            p = sinfo.get("regularMarketPrice") or sinfo.get("currentPrice", 0)
+            prev = sinfo.get("regularMarketPreviousClose") or sinfo.get("previousClose", p)
+            chg = ((p - prev) / prev * 100) if prev else 0
+            sector_data.append({"sector": sec_name, "etf": etf, "change": chg})
+        except Exception:
+            sector_data.append({"sector": sec_name, "etf": etf, "change": 0})
+
+    # Treemap
+    if sector_data:
+        labels = [f"{d['sector']}\n{d['change']:+.2f}%" for d in sector_data]
+        values = [abs(d["change"]) + 0.1 for d in sector_data]
+        colors = ["#4caf50" if d["change"] >= 0 else "#f44336" for d in sector_data]
+
+        fig_tm = go.Figure(go.Treemap(
+            labels=labels,
+            parents=[""] * len(labels),
+            values=values,
+            marker=dict(
+                colors=[d["change"] for d in sector_data],
+                colorscale=[[0, "#c62828"], [0.5, "#fff9c4"], [1, "#2e7d32"]],
+                cmid=0,
+            ),
+            textinfo="label",
+            textfont=dict(size=14),
+        ))
+        fig_tm.update_layout(height=400, margin=dict(l=10, r=10, t=10, b=10))
+        st.plotly_chart(fig_tm, use_container_width=True)
+
+        # Sector pills
+        etf_syms = [d["etf"] for d in sector_data]
+        selected_etf = st.pills("🔍 Analyze sector ETF", etf_syms,
+                                default=None, key="sector_pill")
+        if selected_etf:
+            del st.session_state["sector_pill"]
+            go_to_analysis(selected_etf)
+            st.rerun()
+
+    # ── Market tip ──
+    st.divider()
+    if fg_score <= 30:
+        st.info("💡 **When others are fearful, be greedy.** — Warren Buffett. "
+                "Extreme fear can be a buying opportunity for long-term investors.")
+    elif fg_score >= 70:
+        st.info("💡 **When others are greedy, be fearful.** — Warren Buffett. "
+                "Extreme greed can signal a market top. Consider taking profits.")
+    else:
+        st.info("💡 **Market sentiment is balanced.** Focus on individual stock "
+                "fundamentals rather than market-wide emotion.")
 
 elif page == "📊 Screener":
     st.markdown("## 📊 Stock Screener")
@@ -1066,7 +1415,8 @@ elif page == "🏆 Rankings":
 # ═════════════════════════════════════════════════════════════════════════════
 
 elif page == "⚖️ Compare":
-    st.markdown("## ⚖️ Stock Comparison")
+    st.markdown("## ⚖️ Stock X-Ray Comparison")
+    st.caption("Side-by-side deep analysis — returns, risk, correlation, drawdowns")
 
     cmp_syms = st.text_input("Symbols (comma-separated)", "AAPL, MSFT, GOOGL, AMZN")
     cmp_period = st.selectbox("Period", ["3mo", "6mo", "1y", "2y", "5y"], index=2)
@@ -1088,32 +1438,269 @@ elif page == "⚖️ Compare":
             if len(data) < 2:
                 st.error("Could not fetch data for enough symbols.")
             else:
-                # Returns chart
-                fig = create_comparison_chart(data)
-                st.plotly_chart(fig, use_container_width=True)
+                # Tab layout for comparison views
+                cmp_tab1, cmp_tab2, cmp_tab3, cmp_tab4 = st.tabs(
+                    ["📈 Returns", "🎲 Risk & Volatility", "🔗 Correlation", "⭐ Head-to-Head"]
+                )
 
-                st.divider()
-                st.markdown("### Head-to-Head Scores")
+                # TAB: Returns
+                with cmp_tab1:
+                    fig = create_comparison_chart(data)
+                    st.plotly_chart(fig, use_container_width=True)
 
-                score_cols = st.columns(len(symbols))
-                for i, sym in enumerate(symbols):
-                    with score_cols[i]:
-                        with st.spinner(f"Scoring {sym}..."):
-                            result = compute_score(sym, cmp_period)
-                        if result.get("error"):
-                            st.error(f"{sym}: {result['error']}")
-                        else:
-                            st.markdown(f"### {sym}")
-                            st.markdown(f"## {result['overall_score']:.0f}")
-                            st.markdown(rating_badge(result["rating"]), unsafe_allow_html=True)
-                            st.markdown(f"- Tech: {result.get('technical_score', 'N/A')}")
-                            st.markdown(f"- Fund: {result.get('fundamental_score', 'N/A')}")
-                            st.markdown(f"- Trend: {result.get('trend_score', 'N/A')}")
-                            st.markdown(f"- Mom: {result.get('momentum_score', 'N/A')}")
-                            if st.button(f"→ Full Analysis", key=f"cmp_{sym}",
-                                         type="tertiary"):
-                                go_to_analysis(sym)
-                                st.rerun()
+                    # Return stats table
+                    ret_rows = []
+                    for sym, df in data.items():
+                        c = df["Close"]
+                        total_ret = (c.iloc[-1] / c.iloc[0] - 1) * 100
+                        ret_rows.append({
+                            "Symbol": sym,
+                            "Start": f"${c.iloc[0]:.2f}",
+                            "End": f"${c.iloc[-1]:.2f}",
+                            "Total Return": f"{total_ret:+.2f}%",
+                            "Best Day": f"{c.pct_change().max()*100:+.2f}%",
+                            "Worst Day": f"{c.pct_change().min()*100:+.2f}%",
+                        })
+                    st.dataframe(pd.DataFrame(ret_rows), use_container_width=True,
+                                 hide_index=True)
+
+                # TAB: Risk & Volatility
+                with cmp_tab2:
+                    risk_rows = []
+                    for sym, df in data.items():
+                        daily_ret = df["Close"].pct_change().dropna()
+                        vol = daily_ret.std() * np.sqrt(252) * 100
+                        sharpe = (daily_ret.mean() / daily_ret.std() * np.sqrt(252)
+                                  if daily_ret.std() > 0 else 0)
+                        # Max drawdown
+                        cum = (1 + daily_ret).cumprod()
+                        peak = cum.cummax()
+                        dd = ((cum - peak) / peak * 100).min()
+                        risk_rows.append({
+                            "Symbol": sym,
+                            "Annualized Volatility": f"{vol:.1f}%",
+                            "Sharpe Ratio": f"{sharpe:.2f}",
+                            "Max Drawdown": f"{dd:.1f}%",
+                            "Avg Daily Move": f"{daily_ret.abs().mean()*100:.2f}%",
+                        })
+                    st.dataframe(pd.DataFrame(risk_rows), use_container_width=True,
+                                 hide_index=True)
+
+                    # Drawdown chart
+                    st.markdown("#### Drawdown Over Time")
+                    fig_dd = go.Figure()
+                    for sym, df in data.items():
+                        daily_ret = df["Close"].pct_change().dropna()
+                        cum = (1 + daily_ret).cumprod()
+                        peak = cum.cummax()
+                        dd = (cum - peak) / peak * 100
+                        fig_dd.add_trace(go.Scatter(
+                            x=dd.index, y=dd, name=sym, mode="lines",
+                            fill="tozeroy", opacity=0.4,
+                        ))
+                    fig_dd.update_layout(
+                        height=350, template="plotly_white",
+                        yaxis_title="Drawdown (%)",
+                        margin=dict(l=60, r=30, t=30, b=40),
+                        hovermode="x unified",
+                    )
+                    st.plotly_chart(fig_dd, use_container_width=True)
+
+                # TAB: Correlation
+                with cmp_tab3:
+                    st.markdown("#### Return Correlation Matrix")
+                    st.caption("Values close to 1.0 = stocks move together · Close to -1.0 = they move opposite")
+                    returns_df = pd.DataFrame({
+                        sym: df["Close"].pct_change()
+                        for sym, df in data.items()
+                    }).dropna()
+                    corr = returns_df.corr()
+
+                    # Heatmap
+                    fig_corr = go.Figure(go.Heatmap(
+                        z=corr.values,
+                        x=corr.columns.tolist(),
+                        y=corr.index.tolist(),
+                        colorscale=[[0, "#c62828"], [0.5, "#fff9c4"], [1, "#2e7d32"]],
+                        zmin=-1, zmax=1,
+                        text=[[f"{v:.2f}" for v in row] for row in corr.values],
+                        texttemplate="%{text}",
+                        textfont=dict(size=14),
+                    ))
+                    fig_corr.update_layout(
+                        height=350, margin=dict(l=80, r=30, t=30, b=80),
+                    )
+                    st.plotly_chart(fig_corr, use_container_width=True)
+
+                    # Diversification tip
+                    avg_corr = corr.where(
+                        np.triu(np.ones(corr.shape), k=1).astype(bool)
+                    ).stack().mean()
+                    if avg_corr > 0.8:
+                        st.warning("⚠️ These stocks are highly correlated — "
+                                   "they tend to move together. Low diversification benefit.")
+                    elif avg_corr < 0.3:
+                        st.success("✅ Good diversification — these stocks have "
+                                   "low correlation, reducing portfolio risk.")
+                    else:
+                        st.info(f"Moderate average correlation ({avg_corr:.2f}). "
+                                "Some diversification benefit.")
+
+                # TAB: Head-to-Head Scores
+                with cmp_tab4:
+                    score_cols = st.columns(min(len(symbols), 4))
+                    for i, sym in enumerate(symbols[:4]):
+                        with score_cols[i]:
+                            with st.spinner(f"Scoring {sym}..."):
+                                result = compute_score(sym, cmp_period)
+                            if result.get("error"):
+                                st.error(f"{sym}: {result['error']}")
+                            else:
+                                st.markdown(f"### {sym}")
+                                st.markdown(f"## {result['overall_score']:.0f}")
+                                st.markdown(rating_badge(result["rating"]),
+                                            unsafe_allow_html=True)
+                                st.markdown(f"- Tech: {result.get('technical_score', 'N/A')}")
+                                st.markdown(f"- Fund: {result.get('fundamental_score', 'N/A')}")
+                                st.markdown(f"- Trend: {result.get('trend_score', 'N/A')}")
+                                st.markdown(f"- Mom: {result.get('momentum_score', 'N/A')}")
+                                if st.button(f"→ Full Analysis", key=f"cmp_{sym}",
+                                             type="tertiary"):
+                                    go_to_analysis(sym)
+                                    st.rerun()
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+#  PAGE: What-If Time Machine
+# ═════════════════════════════════════════════════════════════════════════════
+
+elif page == "⏳ What-If Machine":
+    st.markdown("## ⏳ What-If Time Machine")
+    st.markdown("*\"What if I had invested $X in Stock Y, Z years ago?\"*")
+
+    wi1, wi2, wi3 = st.columns(3)
+    with wi1:
+        wi_symbol = st.text_input("Stock symbol", "AAPL").upper().strip()
+    with wi2:
+        wi_amount = st.number_input("Investment amount ($)", min_value=100,
+                                     max_value=10_000_000, value=10_000, step=1000)
+    with wi3:
+        wi_years = st.selectbox("Years ago", [1, 2, 3, 5, 10, 15, 20], index=3)
+
+    wi_go = st.button("🚀 Calculate", type="primary", use_container_width=True)
+
+    if wi_go and wi_symbol:
+        period_map = {1: "1y", 2: "2y", 3: "5y", 5: "5y", 10: "max",
+                      15: "max", 20: "max"}
+        with st.spinner(f"Traveling back {wi_years} years..."):
+            wi_df = fetch_history(wi_symbol, period_map.get(wi_years, "max"))
+
+        if wi_df.empty:
+            st.error(f"No data for {wi_symbol}")
+        else:
+            # Find the target date
+            target_date = datetime.now() - timedelta(days=wi_years * 365)
+            # Find closest available date
+            available = wi_df.index[wi_df.index >= target_date]
+            if available.empty:
+                available = wi_df.index
+            start_idx = available[0]
+
+            start_price = wi_df.loc[start_idx, "Close"]
+            end_price = wi_df["Close"].iloc[-1]
+            shares_bought = wi_amount / start_price
+            current_value = shares_bought * end_price
+            total_return = (current_value / wi_amount - 1) * 100
+            profit = current_value - wi_amount
+            actual_years = (wi_df.index[-1] - start_idx).days / 365.25
+            cagr = ((current_value / wi_amount) ** (1 / max(actual_years, 0.1)) - 1) * 100
+
+            # Results
+            profit_color = "#4caf50" if profit >= 0 else "#f44336"
+            profit_emoji = "📈" if profit >= 0 else "📉"
+
+            st.markdown(
+                f'<div style="background:linear-gradient(135deg,#f8f9fa,#e8f0fe);'
+                f'border-radius:16px;padding:1.5rem;border:2px solid {profit_color};'
+                f'text-align:center;margin:1rem 0">'
+                f'<div style="font-size:1rem;color:#666">Your ${wi_amount:,.0f} investment '
+                f'in <b>{wi_symbol}</b> {wi_years} years ago would be worth</div>'
+                f'<div style="font-size:3rem;font-weight:900;color:{profit_color};'
+                f'margin:0.3rem 0">${current_value:,.2f}</div>'
+                f'<div style="font-size:1.3rem;color:{profit_color};font-weight:700">'
+                f'{profit_emoji} {total_return:+,.1f}% total return '
+                f'(${profit:+,.2f})</div>'
+                f'</div>',
+                unsafe_allow_html=True,
+            )
+
+            r1, r2, r3, r4 = st.columns(4)
+            r1.metric("Shares Bought", f"{shares_bought:,.2f}")
+            r2.metric("Buy Price", f"${start_price:.2f}")
+            r3.metric("Current Price", f"${end_price:.2f}")
+            r4.metric("CAGR", f"{cagr:.1f}%")
+
+            st.divider()
+
+            # Portfolio growth chart
+            wi_subset = wi_df.loc[start_idx:].copy()
+            wi_subset["Portfolio"] = (wi_subset["Close"] / start_price) * wi_amount
+
+            fig_wi = go.Figure()
+            fig_wi.add_trace(go.Scatter(
+                x=wi_subset.index, y=wi_subset["Portfolio"],
+                name="Portfolio Value", mode="lines",
+                fill="tozeroy",
+                line=dict(color=profit_color, width=2),
+                fillcolor=f"rgba({'76,175,80' if profit >= 0 else '244,67,54'},0.15)",
+            ))
+            fig_wi.add_hline(y=wi_amount, line_dash="dash",
+                             line_color="#888", opacity=0.5,
+                             annotation_text=f"Initial ${wi_amount:,.0f}")
+            fig_wi.update_layout(
+                height=400, template="plotly_white",
+                yaxis_title="Portfolio Value ($)",
+                title="Growth of Your Investment Over Time",
+                margin=dict(l=60, r=30, t=60, b=40),
+                hovermode="x unified",
+            )
+            st.plotly_chart(fig_wi, use_container_width=True)
+
+            # Compare vs index
+            st.divider()
+            st.markdown("#### 🏁 vs. S&P 500")
+            sp_df = fetch_history("^GSPC", period_map.get(wi_years, "max"))
+            if not sp_df.empty:
+                sp_avail = sp_df.index[sp_df.index >= start_idx]
+                if not sp_avail.empty:
+                    sp_start = sp_df.loc[sp_avail[0], "Close"]
+                    sp_end = sp_df["Close"].iloc[-1]
+                    sp_value = wi_amount * (sp_end / sp_start)
+                    sp_return = (sp_end / sp_start - 1) * 100
+
+                    vs1, vs2 = st.columns(2)
+                    with vs1:
+                        st.metric(f"{wi_symbol}",
+                                  f"${current_value:,.0f}",
+                                  f"{total_return:+.1f}%")
+                    with vs2:
+                        st.metric("S&P 500",
+                                  f"${sp_value:,.0f}",
+                                  f"{sp_return:+.1f}%")
+
+                    if current_value > sp_value:
+                        st.success(f"🏆 {wi_symbol} beat the S&P 500 by "
+                                   f"**${current_value - sp_value:,.0f}** "
+                                   f"({total_return - sp_return:+.1f} percentage points)")
+                    else:
+                        st.warning(f"The S&P 500 outperformed {wi_symbol} by "
+                                   f"**${sp_value - current_value:,.0f}** "
+                                   f"({sp_return - total_return:+.1f} percentage points)")
+
+            # Quick analyze link
+            if st.button(f"🔍 Full Analysis of {wi_symbol}", type="tertiary"):
+                go_to_analysis(wi_symbol)
+                st.rerun()
 
 
 # ═════════════════════════════════════════════════════════════════════════════
