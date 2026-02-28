@@ -266,8 +266,18 @@ def csv_download(df, filename, label="📥 Download CSV"):
 # ─── AI / LLM Engine ────────────────────────────────────────────────────────
 
 def _normalize_base_url(url: str) -> str:
-    """Ensure the base URL ends with /v1 (required by OpenAI-compatible APIs)."""
+    """Ensure the base URL ends with /v1 and uses 127.0.0.1 instead of localhost.
+
+    On Windows, 'localhost' often resolves to ::1 (IPv6) first, but Ollama
+    only listens on 127.0.0.1 (IPv4).  Using the IP directly avoids the
+    DNS-resolution mismatch that causes 'Connection error' inside Streamlit.
+    """
     url = url.rstrip("/")
+    # Fix IPv6/IPv4 mismatch: Ollama binds to 127.0.0.1, not ::1
+    url = url.replace("://localhost:", "://127.0.0.1:")
+    url = url.replace("://localhost/", "://127.0.0.1/")
+    if url.endswith("://localhost"):
+        url = url.replace("://localhost", "://127.0.0.1")
     if not url.endswith("/v1"):
         url += "/v1"
     return url
@@ -320,7 +330,16 @@ def call_llm(system_prompt: str, user_prompt: str,
         )
         return resp.choices[0].message.content.strip()
     except Exception as e:
-        return f"⚠️ AI Error: {e}"
+        err_type = type(e).__name__
+        hint = ""
+        err_lower = str(e).lower()
+        if "connection" in err_lower or "connect" in err_lower:
+            base = st.session_state.get("openai_base_url", "")
+            if "localhost" in base:
+                hint = " Try changing 'localhost' to '127.0.0.1' in the Base URL."
+            else:
+                hint = " Is the AI server running?"
+        return f"⚠️ AI Error ({err_type}): {e}{hint}"
 
 
 def build_stock_context(symbol, info, result, signals, trend_data, metrics, articles=None):
@@ -783,7 +802,7 @@ with st.sidebar:
         ollama_running = False
         try:
             import urllib.request
-            req = urllib.request.urlopen("http://localhost:11434/api/tags", timeout=2)
+            req = urllib.request.urlopen("http://127.0.0.1:11434/api/tags", timeout=2)
             ollama_running = req.status == 200
         except Exception:
             pass
@@ -792,7 +811,7 @@ with st.sidebar:
             st.success("🌟 Ollama detected running locally!")
             if st.button("⚡ Auto-configure Ollama", use_container_width=True):
                 st.session_state["openai_api_key"] = "ollama"
-                st.session_state["openai_base_url"] = "http://localhost:11434/v1"
+                st.session_state["openai_base_url"] = "http://127.0.0.1:11434"
                 st.session_state["openai_model"] = "llama3.2"
                 st.rerun()
 
@@ -829,7 +848,11 @@ with st.sidebar:
                 else:
                     st.error(f"❌ {test_result}")
                     base = st.session_state.get('openai_base_url', '')
-                    if base and '/v1' not in base:
+                    if 'localhost' in base:
+                        st.info("💡 Tip: Change 'localhost' to '127.0.0.1'. "
+                                "On Windows, localhost can resolve to IPv6 (::1) "
+                                "but Ollama only listens on IPv4 (127.0.0.1).")
+                    elif base and '/v1' not in base:
                         st.info("💡 Tip: The URL will be auto-corrected to include /v1")
         elif HAS_OPENAI:
             st.info("Enter an API key to enable AI insights")
