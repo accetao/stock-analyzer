@@ -160,3 +160,63 @@ def clear_cache():
     """Clear all cached data."""
     _cache.clear()
     logger.info("Cache cleared.")
+
+
+def get_news(symbol: str, max_items: int = 10) -> list[dict]:
+    """
+    Fetch latest news articles for a symbol from Yahoo Finance.
+
+    Returns a list of dicts with keys:
+        title, publisher, link, publish_time, thumbnail
+    """
+    key = _cache_key(symbol, "news", "", "")
+    cached = _get_cached(key)
+    if cached is not None:
+        return cached
+
+    try:
+        ticker = get_ticker(symbol)
+        raw_news = ticker.news or []
+        articles = []
+        for item in raw_news[:max_items]:
+            content = item.get("content", {}) if isinstance(item, dict) else {}
+            # yfinance ≥ 0.2.31 nests under "content"; older versions are flat
+            if content:
+                pub_date = content.get("pubDate", "")
+                articles.append({
+                    "title": content.get("title", "No title"),
+                    "publisher": content.get("provider", {}).get("displayName", "")
+                                if isinstance(content.get("provider"), dict)
+                                else str(content.get("provider", "")),
+                    "link": content.get("canonicalUrl", {}).get("url", "")
+                            if isinstance(content.get("canonicalUrl"), dict)
+                            else content.get("url", content.get("link", "")),
+                    "publish_time": pub_date,
+                    "thumbnail": (
+                        content.get("thumbnail", {}).get("resolutions", [{}])[0].get("url", "")
+                        if isinstance(content.get("thumbnail"), dict)
+                        else ""
+                    ),
+                })
+            else:
+                # Flat dict fallback (older yfinance)
+                ts = item.get("providerPublishTime", 0)
+                pub_str = (
+                    dt.datetime.fromtimestamp(ts).strftime("%Y-%m-%d %H:%M")
+                    if ts else ""
+                )
+                articles.append({
+                    "title": item.get("title", "No title"),
+                    "publisher": item.get("publisher", ""),
+                    "link": item.get("link", ""),
+                    "publish_time": pub_str,
+                    "thumbnail": (item.get("thumbnail", {})
+                                   .get("resolutions", [{}])[0]
+                                   .get("url", ""))
+                                  if isinstance(item.get("thumbnail"), dict) else "",
+                })
+        _set_cached(key, articles)
+        return articles
+    except Exception as e:
+        logger.error("Error fetching news for %s: %s", symbol, e)
+        return []

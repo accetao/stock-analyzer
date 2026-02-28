@@ -264,6 +264,11 @@ def compute_score(symbol, period="1y"):
     return stock_scorer.score_stock(symbol, period=period)
 
 
+@st.cache_data(ttl=900, show_spinner=False)
+def fetch_news(symbol, max_items=10):
+    return data_fetcher.get_news(symbol, max_items=max_items)
+
+
 # ─── Interactive Plotly Charts ───────────────────────────────────────────────
 
 def create_price_chart(df, symbol, show_sma=True, show_bb=True,
@@ -539,7 +544,7 @@ elif page == "🔍 Stock Analysis":
             ta.add_all_indicators(df)
             last = df.iloc[-1]
 
-            # ── Header metrics ──
+            # ── Header ──
             price = info.get("currentPrice") or info.get("regularMarketPrice") or last["Close"]
             prev = info.get("previousClose") or info.get("regularMarketPreviousClose")
             change = ((price - prev) / prev * 100) if price and prev else 0
@@ -547,6 +552,7 @@ elif page == "🔍 Stock Analysis":
             st.markdown(f"### {info.get('shortName', symbol)} ({symbol})")
             st.caption(f"{info.get('sector', '')} · {info.get('industry', '')}")
 
+            # ── Key Metrics Row ──
             m1, m2, m3, m4, m5 = st.columns(5)
             m1.metric("Price", f"${price:.2f}", f"{change:+.2f}%")
             m2.metric("Market Cap", fmt_number(info.get("marketCap"), "$"))
@@ -554,9 +560,120 @@ elif page == "🔍 Stock Analysis":
             m4.metric("52W High", f"${info.get('fiftyTwoWeekHigh', 0):.2f}")
             m5.metric("52W Low", f"${info.get('fiftyTwoWeekLow', 0):.2f}")
 
+            # ── Compute score once for verdict + score tab ──
+            with st.spinner("Computing investment score..."):
+                result = compute_score(symbol, period)
+            signals = ta.get_latest_signals(df)
+            metrics = fa.get_fundamental_metrics(symbol)
+            trend_data = trend_analyzer.classify_trend(df)
+
+            # ════════════════════════════════════════════════════════════════
+            #  INVESTMENT VERDICT – the most important section
+            # ════════════════════════════════════════════════════════════════
+            if not result.get("error"):
+                rating = result["rating"]
+                overall = result["overall_score"]
+                r_color = rating_color(rating)
+                bg_color = {
+                    "STRONG BUY": "#e8f5e9", "BUY": "#f1f8e9",
+                    "HOLD": "#fff8e1", "SELL": "#fbe9e7",
+                    "STRONG SELL": "#ffebee",
+                }.get(rating, "#f5f5f5")
+                emoji = {"STRONG BUY": "🟢🟢", "BUY": "🟢", "HOLD": "🟡",
+                         "SELL": "🔴", "STRONG SELL": "🔴🔴"}.get(rating, "⚪")
+
+                # Build plain-English bullet points
+                pros, cons = [], []
+                # Trend
+                trend_dir = trend_data.get("trend", "SIDEWAYS")
+                if "UP" in str(trend_dir).upper():
+                    pros.append(f"📈 Price is in a **{trend_dir.replace('_', ' ').lower()}** trend")
+                elif "DOWN" in str(trend_dir).upper():
+                    cons.append(f"📉 Price is in a **{trend_dir.replace('_', ' ').lower()}** trend")
+                # RSI
+                rsi_sig = signals.get("rsi_signal", "")
+                rsi_val = signals.get("rsi", "")
+                if rsi_sig == "OVERSOLD":
+                    pros.append(f"🔋 RSI at {rsi_val} — oversold, potential bounce ahead")
+                elif rsi_sig == "OVERBOUGHT":
+                    cons.append(f"⚠️ RSI at {rsi_val} — overbought, may pull back")
+                # MACD
+                macd_sig = signals.get("macd_signal", "")
+                if "BULLISH" in macd_sig:
+                    pros.append("✅ MACD shows bullish momentum")
+                elif "BEARISH" in macd_sig:
+                    cons.append("❌ MACD shows bearish momentum")
+                # SMA 200
+                if signals.get("above_sma200"):
+                    pros.append("✅ Trading above 200-day moving average (long-term uptrend)")
+                else:
+                    cons.append("❌ Trading below 200-day moving average (long-term weakness)")
+                # Fundamental
+                if metrics:
+                    pe = metrics.get("trailing_pe")
+                    if pe is not None:
+                        if pe < 15:
+                            pros.append(f"💰 P/E ratio of {pe:.1f} — attractively valued")
+                        elif pe > 35:
+                            cons.append(f"💸 P/E ratio of {pe:.1f} — expensive valuation")
+                    pm = metrics.get("profit_margin")
+                    if pm is not None and pm > 0.15:
+                        pros.append(f"💎 Strong profit margin of {pm*100:.1f}%")
+                    rg = metrics.get("revenue_growth")
+                    if rg is not None:
+                        if rg > 0.1:
+                            pros.append(f"🚀 Revenue growing at {rg*100:.1f}%")
+                        elif rg < -0.05:
+                            cons.append(f"📉 Revenue declining at {rg*100:.1f}%")
+                    de = metrics.get("debt_to_equity")
+                    if de is not None and de > 200:
+                        cons.append(f"⚠️ High debt-to-equity ratio of {de:.0f}")
+                    rec = (metrics.get("recommendation") or "").upper()
+                    target = metrics.get("target_mean_price")
+                    if target and price:
+                        upside = (target - price) / price * 100
+                        if upside > 5:
+                            pros.append(f"🎯 Analyst target ${target:.0f} ({upside:+.0f}% upside)")
+                        elif upside < -5:
+                            cons.append(f"🎯 Analyst target ${target:.0f} ({upside:+.0f}% downside)")
+
+                # Render verdict card
+                st.markdown(
+                    f'<div style="background:{bg_color};border:2px solid {r_color};'
+                    f'border-radius:14px;padding:1.2rem 1.5rem;margin:0.8rem 0 1rem 0">'
+                    f'<div style="display:flex;align-items:center;gap:0.8rem;flex-wrap:wrap">'
+                    f'<span style="font-size:2.2rem;font-weight:800;color:{r_color}">'
+                    f'{overall:.0f}</span>'
+                    f'<span style="font-size:1.4rem;font-weight:700;color:{r_color}">'
+                    f'{emoji} {rating}</span>'
+                    f'<span style="color:#666;font-size:0.9rem;margin-left:auto">'
+                    f'Investment Score out of 100</span>'
+                    f'</div></div>',
+                    unsafe_allow_html=True,
+                )
+
+                vc1, vc2 = st.columns(2)
+                with vc1:
+                    if pros:
+                        st.markdown("**✅ Bullish Factors**")
+                        for p in pros:
+                            st.markdown(f"- {p}")
+                    else:
+                        st.markdown("**✅ Bullish Factors**\n- _No strong bullish signals detected_")
+                with vc2:
+                    if cons:
+                        st.markdown("**⚠️ Risk Factors**")
+                        for c in cons:
+                            st.markdown(f"- {c}")
+                    else:
+                        st.markdown("**⚠️ Risk Factors**\n- _No significant risks detected_")
+
+            st.divider()
+
             # ── Tabs ──
-            tab_chart, tab_score, tab_tech, tab_fund, tab_trend = st.tabs(
-                ["📊 Chart", "⭐ Score", "🔧 Technical", "📑 Fundamental", "📈 Trend"]
+            tab_chart, tab_score, tab_tech, tab_fund, tab_trend, tab_news = st.tabs(
+                ["📊 Chart", "⭐ Score Details", "🔧 Technical",
+                 "📑 Fundamental", "📈 Trend", "📰 News"]
             )
 
             # ── TAB: Chart ──
@@ -572,52 +689,50 @@ elif page == "🔍 Stock Analysis":
                                          show_vol, show_rsi, show_macd)
                 st.plotly_chart(fig, use_container_width=True)
 
-            # ── TAB: Score ──
+            # ── TAB: Score Details ──
             with tab_score:
-                with st.spinner("Computing investment score..."):
-                    result = compute_score(symbol, period)
-
                 if result.get("error"):
                     st.error(result["error"])
                 else:
                     sc1, sc2 = st.columns([1, 2])
                     with sc1:
-                        overall = result["overall_score"]
-                        st.markdown(f"### Overall Score")
-                        st.markdown(f"# {overall:.0f}/100")
+                        st.markdown("### Overall Score")
+                        st.markdown(f"# {result['overall_score']:.0f}/100")
                         st.markdown(rating_badge(result["rating"]), unsafe_allow_html=True)
 
                     with sc2:
-                        sub_data = {
-                            "Dimension": ["Technical", "Fundamental", "Trend", "Momentum"],
-                            "Score": [
-                                result.get("technical_score") or 0,
-                                result.get("fundamental_score") or 0,
-                                result.get("trend_score") or 0,
-                                result.get("momentum_score") or 0,
-                            ],
-                            "Weight": ["35%", "30%", "20%", "15%"],
-                        }
-                        st.dataframe(pd.DataFrame(sub_data), use_container_width=True,
-                                     hide_index=True)
+                        # Visual progress bars for each dimension
+                        dims = [
+                            ("🔧 Technical", result.get("technical_score") or 0, 35),
+                            ("📑 Fundamental", result.get("fundamental_score") or 0, 30),
+                            ("📈 Trend", result.get("trend_score") or 0, 20),
+                            ("🚀 Momentum", result.get("momentum_score") or 0, 15),
+                        ]
+                        for label, sc_val, weight in dims:
+                            dcol1, dcol2 = st.columns([3, 1])
+                            with dcol1:
+                                st.caption(f"{label} (weight {weight}%)")
+                                st.progress(min(sc_val / 100, 1.0))
+                            with dcol2:
+                                st.markdown(f"**{sc_val:.0f}**/100")
 
-                    # Breakdown details
                     st.divider()
+                    st.markdown("#### What's driving the score?")
                     bd = result.get("breakdown", {})
                     bc1, bc2 = st.columns(2)
                     with bc1:
-                        st.markdown("**Technical Breakdown**")
+                        st.markdown("**Technical Signals**")
                         for k, v in bd.get("technical", {}).items():
-                            st.markdown(f"- `{k}`: {v}")
+                            st.markdown(f"- {k.replace('_', ' ').title()}: {v}")
                     with bc2:
-                        st.markdown("**Momentum Details**")
+                        st.markdown("**Price Momentum**")
                         for k, v in bd.get("momentum", {}).items():
-                            st.markdown(f"- `{k}`: {v}")
+                            st.markdown(f"- {k.replace('_', ' ').title()}: {v}")
 
             # ── TAB: Technical ──
             with tab_tech:
-                signals = ta.get_latest_signals(df)
-                st.markdown("#### Current Signals")
+                st.markdown("#### Signal Dashboard")
+                st.caption("Current readings from key technical indicators")
 
                 sg1, sg2, sg3, sg4 = st.columns(4)
                 sg1.markdown(f"**RSI**<br>{signal_badge(signals.get('rsi_signal', 'N/A'))}<br>"
@@ -635,17 +750,18 @@ elif page == "🔍 Stock Analysis":
                     st.markdown("**Trend Indicators**")
                     st.markdown(f"- MA Trend: {signal_badge(signals.get('ma_trend', 'N/A'))}",
                                 unsafe_allow_html=True)
-                    st.markdown(f"- Above SMA 200: {'✅' if signals.get('above_sma200') else '❌'}")
-                    st.markdown(f"- % from SMA 200: {signals.get('pct_from_sma200', 'N/A')}%")
+                    st.markdown(f"- Above SMA 200: {'✅ Yes' if signals.get('above_sma200') else '❌ No'}")
+                    pct_sma = signals.get('pct_from_sma200', 'N/A')
+                    st.markdown(f"- Distance from SMA 200: {pct_sma}%")
                 with tc2:
-                    st.markdown("**Strength**")
+                    st.markdown("**Trend Strength**")
                     st.markdown(f"- ADX: {signals.get('adx', 'N/A')}")
-                    st.markdown(f"- Trend Strength: {signal_badge(signals.get('trend_strength', 'N/A'))}",
+                    st.markdown(f"- Strength: {signal_badge(signals.get('trend_strength', 'N/A'))}",
                                 unsafe_allow_html=True)
-                    st.markdown(f"- BB Width: {signals.get('bb_width', 'N/A')}")
+                    st.markdown(f"- Bollinger Width: {signals.get('bb_width', 'N/A')}")
 
                 st.divider()
-                st.markdown("#### Indicator Values (Latest)")
+                st.markdown("#### All Indicator Values")
                 ind_cols = [c for c in df.columns
                             if c not in ("Open", "High", "Low", "Close", "Volume")]
                 ind_data = {col: [round(last[col], 4) if pd.notna(last[col]) else None]
@@ -654,15 +770,14 @@ elif page == "🔍 Stock Analysis":
 
             # ── TAB: Fundamental ──
             with tab_fund:
-                metrics = fa.get_fundamental_metrics(symbol)
                 fund_score = fa.get_fundamental_score(symbol)
 
                 if not metrics:
-                    st.warning("No fundamental data available.")
+                    st.warning("No fundamental data available for this stock.")
                 else:
-                    # Score header
                     fs = fund_score.get("overall_score", "N/A")
-                    st.markdown(f"**Fundamental Score: {fs}/100**")
+                    st.markdown(f"#### Fundamental Health Score: **{fs}/100**")
+                    st.caption("How strong is this company's financial foundation?")
 
                     fc1, fc2, fc3, fc4 = st.columns(4)
                     fc1.metric("Valuation", f"{fund_score.get('valuation_score', 'N/A')}/100")
@@ -673,20 +788,20 @@ elif page == "🔍 Stock Analysis":
                     st.divider()
                     fl1, fl2, fl3 = st.columns(3)
                     with fl1:
-                        st.markdown("**Valuation**")
+                        st.markdown("**📊 Valuation**")
                         st.markdown(f"- P/E (Trailing): {metrics.get('trailing_pe', 'N/A')}")
                         st.markdown(f"- P/E (Forward): {metrics.get('forward_pe', 'N/A')}")
                         st.markdown(f"- PEG Ratio: {metrics.get('peg_ratio', 'N/A')}")
                         st.markdown(f"- P/B: {metrics.get('price_to_book', 'N/A')}")
                         st.markdown(f"- EV/EBITDA: {metrics.get('ev_to_ebitda', 'N/A')}")
                     with fl2:
-                        st.markdown("**Profitability**")
+                        st.markdown("**💰 Profitability**")
                         st.markdown(f"- Profit Margin: {fmt_pct(metrics.get('profit_margin'))}")
                         st.markdown(f"- Operating Margin: {fmt_pct(metrics.get('operating_margin'))}")
                         st.markdown(f"- ROE: {fmt_pct(metrics.get('roe'))}")
                         st.markdown(f"- ROA: {fmt_pct(metrics.get('roa'))}")
                     with fl3:
-                        st.markdown("**Financial Health**")
+                        st.markdown("**🏦 Financial Health**")
                         st.markdown(f"- Debt/Equity: {metrics.get('debt_to_equity', 'N/A')}")
                         st.markdown(f"- Current Ratio: {metrics.get('current_ratio', 'N/A')}")
                         st.markdown(f"- Free Cash Flow: {fmt_number(metrics.get('free_cashflow'), '$')}")
@@ -694,33 +809,42 @@ elif page == "🔍 Stock Analysis":
                     st.divider()
                     ga1, ga2 = st.columns(2)
                     with ga1:
-                        st.markdown("**Growth**")
+                        st.markdown("**🚀 Growth**")
                         st.markdown(f"- Revenue Growth: {fmt_pct(metrics.get('revenue_growth'))}")
                         st.markdown(f"- Earnings Growth: {fmt_pct(metrics.get('earnings_growth'))}")
                     with ga2:
-                        st.markdown("**Analyst Consensus**")
+                        st.markdown("**🎯 Analyst Consensus**")
                         rec = (metrics.get("recommendation") or "N/A").upper()
                         st.markdown(f"- Recommendation: **{rec}**")
-                        st.markdown(f"- Target Price: ${metrics.get('target_mean_price', 'N/A')}")
+                        tp = metrics.get('target_mean_price')
+                        if tp and price:
+                            upside = (tp - price) / price * 100
+                            st.markdown(
+                                f"- Target Price: **${tp:.2f}** "
+                                f"({'🟢' if upside >= 0 else '🔴'} {upside:+.1f}%)"
+                            )
+                        else:
+                            st.markdown(f"- Target Price: N/A")
                         st.markdown(f"- Target Range: ${metrics.get('target_low_price', 'N/A')} "
                                     f"– ${metrics.get('target_high_price', 'N/A')}")
 
             # ── TAB: Trend ──
             with tab_trend:
-                trend_data = trend_analyzer.classify_trend(df)
                 sr = trend_analyzer.find_support_resistance(df)
 
                 tr1, tr2 = st.columns([1, 2])
                 with tr1:
                     trend_str = trend_data.get("trend", "N/A")
                     conf = trend_data.get("confidence", 0)
-                    st.markdown(f"### {trend_str}")
+                    trend_emoji = "📈" if "UP" in str(trend_str).upper() else (
+                        "📉" if "DOWN" in str(trend_str).upper() else "➡️")
+                    st.markdown(f"### {trend_emoji} {trend_str.replace('_', ' ').title()}")
                     st.progress(min(conf / 100, 1.0), text=f"Confidence: {conf}%")
-                    st.metric("Bullish %", f"{trend_data.get('bullish_pct', 0)}%")
-                    st.metric("Bearish %", f"{trend_data.get('bearish_pct', 0)}%")
+                    st.metric("Bullish Signals", f"{trend_data.get('bullish_pct', 0)}%")
+                    st.metric("Bearish Signals", f"{trend_data.get('bearish_pct', 0)}%")
 
                 with tr2:
-                    st.markdown("**Trend Factors**")
+                    st.markdown("**What factors determine the trend?**")
                     factors = trend_data.get("factors", {})
                     factor_df = pd.DataFrame([
                         {"Factor": k.replace("_", " ").title(), "Value": str(v)}
@@ -730,16 +854,56 @@ elif page == "🔍 Stock Analysis":
                         st.dataframe(factor_df, use_container_width=True, hide_index=True)
 
                 st.divider()
+                st.markdown("#### Key Price Levels")
+                st.caption("Support = price floors where buyers step in · Resistance = ceilings where sellers appear")
                 sr1, sr2, sr3 = st.columns(3)
                 sr1.metric("Current Price", f"${sr.get('current_price', 'N/A')}")
                 with sr2:
-                    st.markdown("**Resistance Levels**")
+                    st.markdown("**🔴 Resistance (sell pressure)**")
                     for r in sr.get("resistance", []):
-                        st.markdown(f"- 🔴 ${r}")
+                        dist = ((r - price) / price * 100) if price else 0
+                        st.markdown(f"- ${r:,.2f}  ({dist:+.1f}% away)")
                 with sr3:
-                    st.markdown("**Support Levels**")
+                    st.markdown("**🟢 Support (buy pressure)**")
                     for s in sr.get("support", []):
-                        st.markdown(f"- 🟢 ${s}")
+                        dist = ((s - price) / price * 100) if price else 0
+                        st.markdown(f"- ${s:,.2f}  ({dist:+.1f}% away)")
+
+            # ── TAB: News ──
+            with tab_news:
+                st.markdown("#### 📰 Latest News")
+                st.caption(f"Recent headlines about {info.get('shortName', symbol)} from Yahoo Finance")
+
+                with st.spinner("Fetching latest news..."):
+                    articles = fetch_news(symbol, max_items=10)
+
+                if not articles:
+                    st.info("No recent news found for this stock.")
+                else:
+                    for i, art in enumerate(articles):
+                        title = art.get("title", "No title")
+                        link = art.get("link", "")
+                        publisher = art.get("publisher", "Unknown")
+                        pub_time = art.get("publish_time", "")
+
+                        with st.container(border=True):
+                            nc1, nc2 = st.columns([5, 1])
+                            with nc1:
+                                if link:
+                                    st.markdown(f"**[{title}]({link})**")
+                                else:
+                                    st.markdown(f"**{title}**")
+                                meta_parts = []
+                                if publisher:
+                                    meta_parts.append(f"📰 {publisher}")
+                                if pub_time:
+                                    meta_parts.append(f"🕐 {pub_time}")
+                                if meta_parts:
+                                    st.caption(" · ".join(meta_parts))
+                            with nc2:
+                                thumb = art.get("thumbnail", "")
+                                if thumb:
+                                    st.image(thumb, width=80)
 
 
 # ═════════════════════════════════════════════════════════════════════════════
