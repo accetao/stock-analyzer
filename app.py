@@ -1260,7 +1260,7 @@ with st.sidebar:
 # ═════════════════════════════════════════════════════════════════════════════
 
 if page == "🏠 Dashboard":
-    st.markdown("## 🏠 Dashboard")
+    st.markdown("## 🏠 My Investment Dashboard")
 
     # Quick symbol entry
     col_a, col_b = st.columns([3, 1])
@@ -1274,35 +1274,29 @@ if page == "🏠 Dashboard":
         go_to_analysis(quick_sym)
         st.rerun()
 
-    st.divider()
-
-    # ── Market Indices ──
-    st.markdown("### 📊 Market Overview")
-    _idx_syms = {"S&P 500": "^GSPC", "NASDAQ": "^IXIC", "DOW 30": "^DJI", "Russell 2000": "^RUT"}
-    _idx_cols = st.columns(len(_idx_syms))
-    for _ic, (_name, _isym) in zip(_idx_cols, _idx_syms.items()):
-        with _ic:
+    # ── Helper: fetch stock card data for a list of symbols ──
+    @st.cache_data(ttl=900, show_spinner=False)
+    def _fetch_cards(symbols_tuple):
+        cards = []
+        for sym in symbols_tuple:
             try:
-                _ii = fetch_info(_isym)
-                _ip = _ii.get("regularMarketPrice", 0)
-                _ipc = _ii.get("regularMarketPreviousClose", _ip)
-                _ich = ((_ip - _ipc) / _ipc * 100) if _ipc else 0
-                _icol = "#4caf50" if _ich >= 0 else "#f44336"
-                _iarrow = "▲" if _ich >= 0 else "▼"
-                st.markdown(
-                    f'<div style="background:linear-gradient(135deg,#f8f9fa,#e8f0fe);'
-                    f'border-radius:12px;padding:0.8rem;text-align:center;'
-                    f'border:1px solid #ddd">'
-                    f'<div style="font-size:0.75rem;color:#888">{_name}</div>'
-                    f'<div style="font-size:1.3rem;font-weight:800">{_ip:,.2f}</div>'
-                    f'<div style="color:{_icol};font-weight:700">{_iarrow} {_ich:+.2f}%</div>'
-                    f'</div>',
-                    unsafe_allow_html=True,
-                )
+                info = fetch_info(sym)
+                if info:
+                    price = info.get("currentPrice") or info.get("regularMarketPrice")
+                    prev = info.get("previousClose") or info.get("regularMarketPreviousClose")
+                    change = ((price - prev) / prev * 100) if price and prev else None
+                    if price:
+                        cards.append({
+                            "symbol": sym,
+                            "name": info.get("shortName", sym)[:25],
+                            "price": price,
+                            "change": change,
+                            "market_cap": info.get("marketCap"),
+                            "sector": info.get("sector", ""),
+                        })
             except Exception:
-                st.metric(_name, "N/A")
-
-    st.divider()
+                pass
+        return cards
 
     # ── Helper: render a row of stock cards ──
     def _render_stock_cards(stocks_data, key_prefix, cols_per_row=4):
@@ -1329,31 +1323,148 @@ if page == "🏠 Dashboard":
                         go_to_analysis(d['symbol'])
                         st.rerun()
 
-    # ── Helper: fetch stock card data for a list of symbols ──
-    @st.cache_data(ttl=900, show_spinner=False)
-    def _fetch_cards(symbols_tuple):
-        cards = []
-        for sym in symbols_tuple:
-            try:
-                info = fetch_info(sym)
-                if info:
-                    price = info.get("currentPrice") or info.get("regularMarketPrice")
-                    prev = info.get("previousClose") or info.get("regularMarketPreviousClose")
-                    change = ((price - prev) / prev * 100) if price and prev else None
-                    if price:
-                        cards.append({
-                            "symbol": sym,
-                            "name": info.get("shortName", sym)[:25],
-                            "price": price,
-                            "change": change,
-                            "market_cap": info.get("marketCap"),
-                            "sector": info.get("sector", ""),
-                        })
-            except Exception:
-                pass
-        return cards
+    st.divider()
 
-    # ── Top Movers (gainers / losers / most active) ──
+    # ══════════════════════════════════════════════════════════════════════
+    #  SECTION 1: My Portfolio Summary (your money first)
+    # ══════════════════════════════════════════════════════════════════════
+    portfolio = st.session_state.get("portfolio", [])
+    if portfolio:
+        st.markdown("### 💰 My Portfolio")
+        _pf_total_cost = 0
+        _pf_total_val = 0
+        _pf_rows = []
+        with st.spinner("Loading portfolio..."):
+            for h in portfolio:
+                try:
+                    info = fetch_info(h["symbol"])
+                    live = info.get("currentPrice") or info.get("regularMarketPrice", 0)
+                    prev = info.get("previousClose") or info.get("regularMarketPreviousClose", live)
+                    cost = h["shares"] * h["buy_price"]
+                    val = h["shares"] * live
+                    pnl = val - cost
+                    day_chg = ((live - prev) / prev * 100) if prev else 0
+                    _pf_total_cost += cost
+                    _pf_total_val += val
+                    _pf_rows.append({
+                        "symbol": h["symbol"],
+                        "shares": h["shares"],
+                        "price": live,
+                        "cost": h["buy_price"],
+                        "value": val,
+                        "pnl": pnl,
+                        "pnl_pct": (pnl / cost * 100) if cost else 0,
+                        "day_chg": day_chg,
+                    })
+                except Exception:
+                    pass
+
+        _pf_total_pnl = _pf_total_val - _pf_total_cost
+        _pf_pnl_pct = (_pf_total_pnl / _pf_total_cost * 100) if _pf_total_cost else 0
+        _pf_color = "#4caf50" if _pf_total_pnl >= 0 else "#f44336"
+        _pf_emoji = "📈" if _pf_total_pnl >= 0 else "📉"
+
+        # Hero summary card
+        st.markdown(
+            f'<div style="background:linear-gradient(135deg,#f8f9fa,#e8f0fe);'
+            f'border-radius:16px;padding:1rem;border:2px solid {_pf_color};'
+            f'text-align:center;margin-bottom:0.8rem">'
+            f'<div style="font-size:0.8rem;color:#666">Portfolio Value</div>'
+            f'<div style="font-size:2rem;font-weight:900">${_pf_total_val:,.2f}</div>'
+            f'<div style="color:{_pf_color};font-weight:700;font-size:1.1rem">'
+            f'{_pf_emoji} {_pf_total_pnl:+,.2f} ({_pf_pnl_pct:+.1f}%)</div>'
+            f'</div>',
+            unsafe_allow_html=True,
+        )
+
+        # Holdings as compact table
+        if _pf_rows:
+            _pc = st.columns([1, 1, 1, 1, 1, 1])
+            _pc[0].markdown("**Symbol**")
+            _pc[1].markdown("**Price**")
+            _pc[2].markdown("**Day**")
+            _pc[3].markdown("**Value**")
+            _pc[4].markdown("**P&L**")
+            _pc[5].markdown("**Action**")
+            for _r in sorted(_pf_rows, key=lambda x: abs(x["pnl"]), reverse=True):
+                _rc = st.columns([1, 1, 1, 1, 1, 1])
+                _rc[0].markdown(f"**{_r['symbol']}**")
+                _rc[1].markdown(f"${_r['price']:.2f}")
+                _dc = "#4caf50" if _r["day_chg"] >= 0 else "#f44336"
+                _rc[2].markdown(f":{('green' if _r['day_chg']>=0 else 'red')}[{_r['day_chg']:+.1f}%]")
+                _rc[3].markdown(f"${_r['value']:,.0f}")
+                _pc2 = "#4caf50" if _r["pnl"] >= 0 else "#f44336"
+                _rc[4].markdown(f":{('green' if _r['pnl']>=0 else 'red')}[{_r['pnl']:+,.0f} ({_r['pnl_pct']:+.1f}%)]")
+                if _rc[5].button("📊", key=f"pf_q_{_r['symbol']}", help=f"Analyze {_r['symbol']}"):
+                    go_to_analysis(_r["symbol"])
+                    st.rerun()
+
+        st.caption(f"💼 {len(portfolio)} holdings · Invested ${_pf_total_cost:,.0f} · "
+                   f"[Edit Portfolio →](javascript:void(0))")
+        st.divider()
+
+    # ══════════════════════════════════════════════════════════════════════
+    #  SECTION 2: Market Overview
+    # ══════════════════════════════════════════════════════════════════════
+    st.markdown("### 📊 Market Overview")
+    _idx_syms = {"S&P 500": "^GSPC", "NASDAQ": "^IXIC", "DOW 30": "^DJI", "Russell 2000": "^RUT", "VIX": "^VIX"}
+    _idx_cols = st.columns(len(_idx_syms))
+    for _ic, (_name, _isym) in zip(_idx_cols, _idx_syms.items()):
+        with _ic:
+            try:
+                _ii = fetch_info(_isym)
+                _ip = _ii.get("regularMarketPrice", 0)
+                _ipc = _ii.get("regularMarketPreviousClose", _ip)
+                _ich = ((_ip - _ipc) / _ipc * 100) if _ipc else 0
+                _icol = "#4caf50" if _ich >= 0 else "#f44336"
+                if _name == "VIX":
+                    _icol = "#f44336" if _ip > 20 else "#4caf50"
+                _iarrow = "▲" if _ich >= 0 else "▼"
+                st.markdown(
+                    f'<div style="background:linear-gradient(135deg,#f8f9fa,#e8f0fe);'
+                    f'border-radius:12px;padding:0.7rem;text-align:center;'
+                    f'border:1px solid #ddd">'
+                    f'<div style="font-size:0.7rem;color:#888">{_name}</div>'
+                    f'<div style="font-size:1.2rem;font-weight:800">{_ip:,.2f}</div>'
+                    f'<div style="color:{_icol};font-weight:700;font-size:0.85rem">{_iarrow} {_ich:+.2f}%</div>'
+                    f'</div>',
+                    unsafe_allow_html=True,
+                )
+            except Exception:
+                st.metric(_name, "N/A")
+
+    st.divider()
+
+    # ══════════════════════════════════════════════════════════════════════
+    #  SECTION 3: Watchlist with quick metrics
+    # ══════════════════════════════════════════════════════════════════════
+    watchlist = utils.load_watchlist("default")
+    if watchlist:
+        st.markdown(f"### ⭐ My Watchlist ({len(watchlist)} stocks)")
+
+        _wl_page_key = "_dash_wl_page"
+        _wl_page = st.session_state.get(_wl_page_key, 1)
+        _wl_per_page = 12
+        _wl_show = watchlist[:_wl_page * _wl_per_page]
+
+        with st.spinner("Loading watchlist..."):
+            _wl_cards = _fetch_cards(tuple(_wl_show))
+
+        if _wl_cards:
+            _render_stock_cards(_wl_cards, "wl")
+
+            if len(_wl_show) < len(watchlist):
+                _wl_remaining = len(watchlist) - len(_wl_show)
+                if st.button(f"Show {min(_wl_remaining, _wl_per_page)} more ↓",
+                             use_container_width=True, key="wl_more"):
+                    st.session_state[_wl_page_key] = _wl_page + 1
+                    st.rerun()
+
+        st.divider()
+
+    # ══════════════════════════════════════════════════════════════════════
+    #  SECTION 4: Market Movers
+    # ══════════════════════════════════════════════════════════════════════
     st.markdown("### 🔥 Today's Market Movers")
     _movers_universe = [
         "AAPL", "MSFT", "GOOGL", "AMZN", "META", "NVDA", "TSLA", "AMD",
@@ -1363,7 +1474,7 @@ if page == "🏠 Dashboard":
         "CRM", "ADBE", "ORCL", "AVGO", "QCOM", "INTC", "MU", "AMAT",
         "GS", "MS", "BLK", "SCHW", "AXP", "C", "WFC",
         "COST", "TGT", "SBUX", "LULU", "CMG",
-        "CRWD", "PLTR", "SNOW", "DDOG", "NET", "COIN", "SHOP", "SQ",
+        "CRWD", "PLTR", "SNOW", "DDOG", "NET", "COIN", "SHOP",
     ]
 
     with st.spinner("Loading market movers..."):
@@ -1375,24 +1486,22 @@ if page == "🏠 Dashboard":
             key=lambda x: x["change"], reverse=True,
         )
         _top_gainers = _sorted_by_change[:8]
-        _top_losers = _sorted_by_change[-8:][::-1]  # worst first
+        _top_losers = _sorted_by_change[-8:][::-1]
 
         _mover_tab1, _mover_tab2 = st.tabs(["📈 Top Gainers", "📉 Top Losers"])
         with _mover_tab1:
             if _top_gainers:
                 _render_stock_cards(_top_gainers, "gain")
-            else:
-                st.info("No data available")
         with _mover_tab2:
             if _top_losers:
                 _render_stock_cards(_top_losers, "lose")
-            else:
-                st.info("No data available")
 
     st.divider()
 
-    # ── Browse by Sector ──
-    st.markdown("### 🏢 Browse by Sector")
+    # ══════════════════════════════════════════════════════════════════════
+    #  SECTION 5: Browse by Sector
+    # ══════════════════════════════════════════════════════════════════════
+    st.markdown("### 🏢 Explore by Sector")
     _SECTOR_STOCKS = {
         "Technology": ["AAPL", "MSFT", "NVDA", "AVGO", "ORCL", "CRM", "ADBE", "AMD", "INTC", "CSCO", "QCOM", "TXN", "MU", "AMAT", "NOW", "PLTR", "CRWD", "PANW", "SNOW", "NET"],
         "Financials": ["JPM", "BAC", "WFC", "GS", "MS", "V", "MA", "AXP", "BLK", "C", "SCHW", "PGR", "CME", "ICE", "CB", "COF", "MET", "AIG", "ALL", "TRV"],
@@ -1413,54 +1522,22 @@ if page == "🏠 Dashboard":
 
     if _selected_sector and _selected_sector in _SECTOR_STOCKS:
         _sec_syms = _SECTOR_STOCKS[_selected_sector]
-
-        # Paginate: show N at a time with "Show more" button
         _sec_page_key = f"_dash_sec_page_{_selected_sector}"
         _sec_page = st.session_state.get(_sec_page_key, 1)
         _per_page = 8
         _show_syms = _sec_syms[:_sec_page * _per_page]
 
-        with st.spinner(f"Loading {_selected_sector} stocks..."):
+        with st.spinner(f"Loading {_selected_sector}..."):
             _sec_cards = _fetch_cards(tuple(_show_syms))
 
         if _sec_cards:
             _render_stock_cards(_sec_cards, f"sec_{_selected_sector[:4]}")
-
-            # Show more button
             if len(_show_syms) < len(_sec_syms):
                 _remaining = len(_sec_syms) - len(_show_syms)
-                if st.button(f"Show {min(_remaining, _per_page)} more {_selected_sector} stocks ↓",
+                if st.button(f"Show {min(_remaining, _per_page)} more ↓",
                              use_container_width=True, key="sec_more"):
                     st.session_state[_sec_page_key] = _sec_page + 1
                     st.rerun()
-        else:
-            st.info(f"Loading {_selected_sector} stocks...")
-
-    st.divider()
-
-    # ── Your Watchlist ──
-    st.markdown("### ⭐ Your Watchlist")
-    watchlist = utils.load_watchlist("default")
-    if watchlist:
-        _wl_page_key = "_dash_wl_page"
-        _wl_page = st.session_state.get(_wl_page_key, 1)
-        _wl_per_page = 8
-        _wl_show = watchlist[:_wl_page * _wl_per_page]
-
-        with st.spinner("Loading watchlist..."):
-            _wl_cards = _fetch_cards(tuple(_wl_show))
-
-        if _wl_cards:
-            _render_stock_cards(_wl_cards, "wl")
-
-            if len(_wl_show) < len(watchlist):
-                _wl_remaining = len(watchlist) - len(_wl_show)
-                if st.button(f"Show {min(_wl_remaining, _wl_per_page)} more watchlist stocks ↓",
-                             use_container_width=True, key="wl_more"):
-                    st.session_state[_wl_page_key] = _wl_page + 1
-                    st.rerun()
-    else:
-        st.info("No watchlist found. Go to 📋 Watchlist to set one up.")
 
 
 # ═════════════════════════════════════════════════════════════════════════════
